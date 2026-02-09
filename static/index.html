@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NutriVision - Food Classifier</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="container">
+        <!-- Header -->
+        <header>
+            <h1>🍽️ NutriVision</h1>
+            <p class="subtitle">Smart Meal Logger Using AI Image Classification</p>
+            <div class="model-info" id="modelInfo">Loading model info...</div>
+            <a href="help.html" class="help-link" target="_blank" title="Learn about accuracy metrics">❓ What do these metrics mean?</a>
+        </header>
+
+        <!-- Main Content -->
+        <div class="main-content">
+            <!-- Left Panel: Upload & Prediction -->
+            <div class="panel upload-panel">
+                <h2>📸 Food Recognition</h2>
+                
+                <div class="tabs">
+                    <button class="tab-btn active" onclick="switchTab('upload')">Upload Image</button>
+                    <button class="tab-btn" onclick="switchTab('dataset')">Test Dataset Sample</button>
+                </div>
+
+                <!-- Upload Tab -->
+                <div id="uploadTab" class="tab-content active">
+                    <div class="upload-area" id="uploadArea">
+                        <input type="file" id="fileInput" accept="image/*" hidden>
+                        <div class="upload-prompt">
+                            <svg width="64" height="64" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                                <path d="M12 5v14M5 12h14"/>
+                            </svg>
+                            <p>Click to upload or drag & drop</p>
+                            <p class="upload-hint">Supports: JPG, PNG, WebP</p>
+                        </div>
+                    </div>
+                    <button id="predictBtn" class="btn-primary" disabled>Analyze Food Image</button>
+                </div>
+
+                <!-- Dataset Tab -->
+                <div id="datasetTab" class="tab-content">
+                    <button id="randomBtn" class="btn-secondary">🎲 Random Image (Any Category)</button>
+                    
+                    <div class="category-selector-container">
+                        <label for="categorySelect">Or choose specific category:</label>
+                        <select id="categorySelect" class="category-select">
+                            <option value="">Loading categories...</option>
+                        </select>
+                        <button id="categoryBtn" class="btn-secondary" disabled>Get Image from Category</button>
+                    </div>
+                    
+                    <div id="datasetInfo" class="dataset-info"></div>
+                    <button id="predictDatasetBtn" class="btn-primary" disabled>Analyze This Image</button>
+                </div>
+
+                <!-- Image Preview -->
+                <div id="imagePreview" class="image-preview" style="display: none;">
+                    <img id="previewImg" alt="Preview">
+                    <button id="clearBtn" class="btn-clear">✕</button>
+                </div>
+
+                <!-- Results -->
+                <div id="results" class="results" style="display: none;">
+                    <h3>🎯 Top-3 Predictions</h3>
+                    <div id="predictionsList"></div>
+                    <div id="trueLabel" class="true-label" style="display: none;"></div>
+                </div>
+
+                <!-- Loading -->
+                <div id="loading" class="loading" style="display: none;">
+                    <div class="spinner"></div>
+                    <p>Analyzing image...</p>
+                </div>
+            </div>
+
+            <!-- Right Panel: Visualizations & Metrics -->
+            <div class="panel viz-panel">
+                <h2>📊 Training Insights</h2>
+                
+                <div class="metrics-summary" id="metricsSummary">
+                    <div class="metric-card">
+                        <h4>Best Model</h4>
+                        <p id="bestModel">-</p>
+                        <span class="metric-hint">Architecture used</span>
+                    </div>
+                    <div class="metric-card" title="How often the #1 prediction is correct">
+                        <h4>Top-1 Accuracy 🎯</h4>
+                        <p id="top1Acc">-</p>
+                        <span class="metric-hint">#1 prediction correct</span>
+                    </div>
+                    <div class="metric-card" title="How often correct answer is in top 3">
+                        <h4>Top-3 Accuracy 🏆</h4>
+                        <p id="top3Acc">-</p>
+                        <span class="metric-hint">Correct in top 3</span>
+                    </div>
+                </div>
+
+                <!-- Carousel for plots -->
+                <div class="carousel-container">
+                    <button class="carousel-btn carousel-prev" onclick="carouselNav(-1)">‹</button>
+                    
+                    <div class="carousel-wrapper">
+                        <div class="carousel-slides" id="carouselSlides">
+                            
+                            <div class="carousel-slide">
+                                <h3>Sample Images</h3>
+                                <img src="/plots/sample_grid" alt="Sample Grid" class="plot-img">
+                            </div>
+                            
+                            <div class="carousel-slide">
+                                <h3>Class Distribution</h3>
+                                <img src="/plots/class_distribution" alt="Class Distribution" class="plot-img">
+                            </div>
+                            
+                            <div class="carousel-slide">
+                                <h3>Training Loss</h3>
+                                <div class="model-selector">
+                                    <button class="model-btn active" onclick="showPlot('resnet50', 'loss')">ResNet50</button>
+                                    <button class="model-btn" onclick="showPlot('efficientnet_b0', 'loss')">EfficientNet-B0</button>
+                                </div>
+                                <img id="lossPlot" src="/plots/resnet50_loss" alt="Loss Curve" class="plot-img">
+                            </div>
+                            
+                            <div class="carousel-slide">
+                                <h3>Training Accuracy</h3>
+                                <div class="model-selector">
+                                    <button class="model-btn active" onclick="showPlot('resnet50', 'accuracy')">ResNet50</button>
+                                    <button class="model-btn" onclick="showPlot('efficientnet_b0', 'accuracy')">EfficientNet-B0</button>
+                                </div>
+                                <img id="accPlot" src="/plots/resnet50_accuracy" alt="Accuracy Curve" class="plot-img">
+                            </div>
+                            
+                            <div class="carousel-slide">
+                                <h3>Confusion Matrix</h3>
+                                <div class="model-selector">
+                                    <button class="model-btn active" onclick="showConfusion('resnet50')">ResNet50</button>
+                                    <button class="model-btn" onclick="showConfusion('efficientnet_b0')">EfficientNet-B0</button>
+                                </div>
+                                <img id="confusionPlot" src="/plots/confusion_resnet50" alt="Confusion Matrix" class="plot-img">
+                            </div>
+                            
+                        </div>
+                    </div>
+                    
+                    <button class="carousel-btn carousel-next" onclick="carouselNav(1)">›</button>
+                </div>
+                
+                <div class="carousel-indicators" id="carouselIndicators"></div>
+                
+                <!-- Per-Class Performance Section -->
+                <div class="per-class-section">
+                    <h2>🎯 Per-Class Performance</h2>
+                    <p class="section-subtitle">
+                        See how well the model recognizes each food category<br>
+                        <strong>Accuracy = % of times the #1 prediction was correct for that food</strong>
+                    </p>
+                    
+                    <div class="performance-controls">
+                        <button class="sort-btn active" onclick="sortPerformance('worst')">Worst First</button>
+                        <button class="sort-btn" onclick="sortPerformance('best')">Best First</button>
+                        <button class="sort-btn" onclick="sortPerformance('name')">Alphabetical</button>
+                        <button id="loadPerformanceBtn" class="btn-load" onclick="loadPerClassPerformance()">Load Analysis</button>
+                    </div>
+                    
+                    <div id="performanceWarning" class="performance-warning">
+                        ⏱️ <strong>First-time load may take several minutes</strong> if not pre-calculated.<br>
+                        💡 Run <code>python src/analyze_performance.py</code> to pre-calculate for instant loading.
+                    </div>
+                    
+                    <div id="performanceLoading" class="performance-loading" style="display: none;">
+                        <div class="spinner"></div>
+                        <p>Analyzing all 101 food classes...</p>
+                    </div>
+                    
+                    <div id="performanceGrid" class="performance-grid"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>

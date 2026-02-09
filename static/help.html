@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Understanding Accuracy Metrics - NutriVision</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+            max-width: 800px;
+            margin: 50px auto;
+            padding: 20px;
+            line-height: 1.6;
+            background: #f5f5f5;
+        }
+        .container {
+            background: white;
+            padding: 40px;
+            border-radius: 12px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #667eea;
+            margin-bottom: 30px;
+        }
+        h2 {
+            color: #333;
+            margin-top: 30px;
+            padding-bottom: 10px;
+            border-bottom: 2px solid #e5e7eb;
+        }
+        .metric-example {
+            background: #f9fafb;
+            padding: 20px;
+            border-radius: 8px;
+            margin: 20px 0;
+            border-left: 4px solid #667eea;
+        }
+        .example-case {
+            margin: 15px 0;
+            padding: 15px;
+            background: white;
+            border-radius: 6px;
+        }
+        .correct {
+            border-left: 4px solid #10b981;
+        }
+        .incorrect {
+            border-left: 4px solid #ef4444;
+        }
+        code {
+            background: #e5e7eb;
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-family: monospace;
+        }
+        .back-link {
+            display: inline-block;
+            margin-top: 30px;
+            color: #667eea;
+            text-decoration: none;
+            font-weight: 600;
+        }
+        .back-link:hover {
+            text-decoration: underline;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>📚 Understanding Accuracy Metrics</h1>
+        
+        <h2>🎯 Top-1 Accuracy</h2>
+        <p><strong>Definition:</strong> The percentage of time the model's <strong>#1 prediction</strong> (highest confidence) is exactly correct.</p>
+        
+        <div class="metric-example">
+            <h3>Example: Pizza Image</h3>
+            <div class="example-case correct">
+                <strong>Scenario 1 (Correct):</strong><br>
+                True Label: <code>pizza</code><br>
+                Model's #1 prediction: <code>pizza</code> ✅<br>
+                <em>This counts toward Top-1 accuracy!</em>
+            </div>
+            
+            <div class="example-case incorrect">
+                <strong>Scenario 2 (Incorrect):</strong><br>
+                True Label: <code>pizza</code><br>
+                Model's #1 prediction: <code>flatbread</code><br>
+                Model's #2 prediction: <code>pizza</code><br>
+                <em>This does NOT count toward Top-1 accuracy (even though pizza is in top 3)</em>
+            </div>
+        </div>
+        
+        <p><strong>Your model's Top-1: 71.73%</strong> means the #1 prediction is correct about 7 out of 10 times.</p>
+        
+        <h2>🏆 Top-3 Accuracy</h2>
+        <p><strong>Definition:</strong> The percentage of time the correct answer appears <strong>anywhere in the top 3 predictions</strong>.</p>
+        
+        <div class="metric-example">
+            <h3>Example: Sushi Image</h3>
+            <div class="example-case correct">
+                <strong>Scenario 1 (Correct):</strong><br>
+                True Label: <code>sushi</code><br>
+                Model's predictions: <code>1. sushi</code>, <code>2. sashimi</code>, <code>3. tuna_roll</code> ✅<br>
+                <em>Counts! (Correct answer in position #1)</em>
+            </div>
+            
+            <div class="example-case correct">
+                <strong>Scenario 2 (Also Correct):</strong><br>
+                True Label: <code>sushi</code><br>
+                Model's predictions: <code>1. sashimi</code>, <code>2. sushi</code>, <code>3. tuna_roll</code> ✅<br>
+                <em>Still counts! (Correct answer in position #2)</em>
+            </div>
+            
+            <div class="example-case correct">
+                <strong>Scenario 3 (Still Correct):</strong><br>
+                True Label: <code>sushi</code><br>
+                Model's predictions: <code>1. sashimi</code>, <code>2. tuna_roll</code>, <code>3. sushi</code> ✅<br>
+                <em>Still counts! (Correct answer in position #3)</em>
+            </div>
+            
+            <div class="example-case incorrect">
+                <strong>Scenario 4 (Incorrect):</strong><br>
+                True Label: <code>sushi</code><br>
+                Model's predictions: <code>1. sashimi</code>, <code>2. tuna_roll</code>, <code>3. salmon</code><br>
+                <em>Does NOT count (correct answer not in top 3)</em>
+            </div>
+        </div>
+        
+        <p><strong>Your model's Top-3: 86.33%</strong> means the correct answer is in the top 3 about 9 out of 10 times.</p>
+        
+        <h2>💡 Why Top-3 Matters</h2>
+        <p>For your "Smart Meal Logger" use case with <strong>human-in-the-loop confirmation</strong>:</p>
+        <ul>
+            <li>Users see 3 options, not just 1</li>
+            <li>If the right answer is in top 3, users can quickly select it</li>
+            <li>86% top-3 accuracy = users find the right answer most of the time</li>
+            <li>Much better user experience than forcing a single prediction!</li>
+        </ul>
+        
+        <h2>📊 Per-Class Accuracy</h2>
+        <p>In the "Per-Class Performance" section, the accuracy shown is <strong>Top-1 accuracy for that specific food</strong>.</p>
+        
+        <div class="metric-example">
+            <p><strong>Example:</strong> If "pizza" shows 90% accuracy, it means:</p>
+            <ul>
+                <li>When the model sees a pizza image</li>
+                <li>It predicts "pizza" as #1</li>
+                <li>90% of the time</li>
+            </ul>
+        </div>
+        
+        <h2>🎓 Summary</h2>
+        <ul>
+            <li><strong>Top-1 (71.73%):</strong> #1 guess is right 71.73% of the time</li>
+            <li><strong>Top-3 (86.33%):</strong> Right answer in top 3 guesses 86.33% of the time</li>
+            <li><strong>Per-Class:</strong> Shows which specific foods the model knows best</li>
+        </ul>
+        
+        <p><strong>For your app:</strong> Top-3 is more important because users pick from 3 options!</p>
+        
+        <a href="index.html" class="back-link">← Back to NutriVision</a>
+    </div>
+</body>
+</html>
