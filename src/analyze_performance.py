@@ -23,6 +23,60 @@ RUNS_DIR = BASE_DIR / "runs"
 OUTPUTS_DIR = BASE_DIR / "outputs"
 
 
+def build_dataset_index(split: str, class_names):
+  
+    """Build Food-101 index from metadata to avoid private torchvision fields."""
+    meta_path = DATA_DIR / "food-101" / "meta" / f"{split}.json"
+    images_dir = DATA_DIR / "food-101" / "images"
+    if not meta_path.exists():
+        raise FileNotFoundError(f"Metadata file not found: {meta_path}")
+
+    with open(meta_path, "r") as f:
+        metadata = json.load(f)
+
+    class_to_idx = {name: i for i, name in enumerate(sorted(metadata.keys()))}
+    records = []
+    idx = 0
+    for class_label, rel_paths in metadata.items():
+        class_idx = class_to_idx[class_label]
+        for rel_path in rel_paths:
+            image_path = images_dir.joinpath(*f"{rel_path}.jpg".split("/"))
+            records.append(
+                {
+                    "index": idx,
+                    "label_index": class_idx,
+                    "label_name": class_names[class_idx],
+                    "image_path": str(image_path),
+                }
+            )
+            idx += 1
+        return records
+
+
+def forward_with_tta(model: nn.Module, inputs: torch.Tensor, device: torch.device,
+                     tta_views: int = 1) -> torch.Tensor:
+    """Inference helper with optional flip-based test-time augmentation."""
+    views = [inputs]
+    if tta_views > 1:
+        views.append(torch.flip(inputs, dims=[3]))
+    if tta_views > 2:
+        views.append(torch.flip(inputs, dims=[2]))
+    if tta_views > 3:
+        views.append(torch.flip(inputs, dims=[2, 3]))
+
+    max_views = min(max(1, int(tta_views)), len(views))
+    logits_sum = None
+    for i in range(max_views):
+        view = views[i]
+        if device.type == 'cuda':
+            with torch.amp.autocast(device_type='cuda', enabled=True):
+                logits = model(view)
+        else:
+            logits = model(view)
+        logits_sum = logits if logits_sum is None else (logits_sum + logits)
+    return logits_sum / float(max_views)
+
+
 def analyze_per_class_performance():
     """Analyze and save per-class performance metrics"""
     
@@ -40,7 +94,10 @@ def analyze_per_class_performance():
     with open(report_path, 'r') as f:
         report = json.load(f)
     
+ 
     best_model_name = report['best_model_name']
+    train_cfg = report.get("config", {})
+    tta_views = int(train_cfg.get("tta_num_views", 1)) if train_cfg.get("eval_tta", False) else 1
     print(f"\n📊 Analyzing: {best_model_name}")
     
     # Setup device
@@ -52,13 +109,21 @@ def analyze_per_class_performance():
         transforms.Resize(256),
         transforms.CenterCrop(224),
         transforms.ToTensor(),
-        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+        transforms.Normalize(
+            mean=[0.485, 0.456, 0.406], 
+            std=[0.229, 0.224, 0.225]
+        )
     ])
     
     # Load dataset
     print("\n📥 Loading Food-101 test dataset...")
     dataset = Food101(root=str(DATA_DIR), split='test', download=False, transform=transform)
     class_names = dataset.classes
+    dataset_index = build_dataset_index(split="test", class_names=class_names)
+    if len(dataset_index) != len(dataset):
+        raise RuntimeError(
+            f"Dataset index size mismatch: metadata={len(dataset_index)} dataset={len(dataset)}"
+        )
     print(f"✓ Loaded {len(dataset)} test images, {len(class_names)} classes")
     
     # Create model
@@ -71,6 +136,22 @@ def analyze_per_class_performance():
         model = models.efficientnet_b0(weights=None)
         num_ftrs = model.classifier[1].in_features
         model.classifier[1] = nn.Linear(num_ftrs, len(class_names))
+    elif best_model_name == 'efficientnet_b4':
+        model = models.efficientnet_b4(weights=None)
+        num_ftrs = model.classifier[1].in_features
+        model.classifier[1] = nn.Linear(num_ftrs, len(class_names))
+    elif best_model_name == 'efficientnet_v2_s':
+        model = models.efficientnet_v2_s(weights=None)
+        num_ftrs = model.classifier[1].in_features
+        model.classifier[1] = nn.Linear(num_ftrs, len(class_names))
+    elif best_model_name == 'convnext_base':
+        model = models.convnext_base(weights=None)
+        num_ftrs = model.classifier[2].in_features
+        model.classifier[2] = nn.Linear(num_ftrs, len(class_names))
+    elif best_model_name == 'mobilenet_v3_large':
+        model = models.mobilenet_v3_large(weights=None)
+        num_ftrs = model.classifier[3].in_features
+        model.classifier[3] = nn.Linear(num_ftrs, len(class_names))
     else:
         print(f"❌ Unknown model: {best_model_name}")
         return
@@ -80,6 +161,7 @@ def analyze_per_class_performance():
     model.load_state_dict(torch.load(model_path, map_location=device))
     model = model.to(device)
     model.eval()
+    print(f"TTA views: {tta_views}")
     print("✓ Model loaded")
     
     # Create dataloader
@@ -106,12 +188,10 @@ def analyze_per_class_performance():
             inputs = inputs.to(device, non_blocking=True)
             labels = labels.to(device, non_blocking=True)
             
+                       
             # Predict
-            if device.type == 'cuda':
-                with torch.cuda.amp.autocast():
-                    outputs = model(inputs)
-            else:
-                outputs = model(inputs)
+            outputs = forward_with_tta(model, inputs, device=device, tta_views=tta_views)
+            
             
             # Get probabilities and predictions
             probs = torch.nn.functional.softmax(outputs, dim=1)
@@ -149,18 +229,18 @@ def analyze_per_class_performance():
     # Compile results
     print("\n📊 Compiling results...")
     results = []
+    first_index_for_label = {}
+    for item in dataset_index:
+        label_idx = item["label_index"]
+        if label_idx not in first_index_for_label:
+            first_index_for_label[label_idx] = item["index"]
     
     for i, class_name in enumerate(class_names):
         if class_total[i] > 0:
             accuracy = (class_correct[i] / class_total[i]) * 100
             avg_confidence = sum(class_confidence[i]) / len(class_confidence[i]) * 100
             
-            # Get a sample image for this class
-            sample_idx = None
-            for idx, label in enumerate(dataset._labels):
-                if label == i:
-                    sample_idx = idx
-                    break
+            sample_idx = first_index_for_label.get(i)
             
             results.append({
                 "class_name": class_name,
