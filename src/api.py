@@ -42,6 +42,8 @@ device = None
 class_names = None
 transform = None
 dataset = None
+dataset_index = None
+inference_tta_views = 1
 
 # Paths
 BASE_DIR = Path(__file__).parent.parent
@@ -55,10 +57,93 @@ if STATIC_DIR.exists():
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 
+def build_dataset_index(split: str, classes: List[str]) -> List[Dict]:
+    """Build a stable index for Food-101 images using metadata files."""
+    meta_path = DATA_DIR / "food-101" / "meta" / f"{split}.json"
+    images_dir = DATA_DIR / "food-101" / "images"
+    if not meta_path.exists():
+        raise FileNotFoundError(f"Food-101 metadata not found: {meta_path}")
+
+    with open(meta_path, "r") as f:
+        metadata = json.load(f)
+
+    class_to_idx = {name: i for i, name in enumerate(sorted(metadata.keys()))}
+    records = []
+    idx = 0
+    for class_label, rel_paths in metadata.items():
+        class_idx = class_to_idx[class_label]
+        for rel_path in rel_paths:
+            image_path = images_dir.joinpath(*f"{rel_path}.jpg".split("/"))
+            records.append(
+                {
+                    "index": idx,
+                    "label_index": class_idx,
+                    "label_name": classes[class_idx],
+                    "image_path": str(image_path),
+                }
+            )
+            idx += 1
+    return records
+
+
+def build_model(model_name: str, num_classes: int) -> nn.Module:
+    """Create model architecture for loading saved checkpoints."""
+    if model_name == 'resnet50':
+        model = models.resnet50(weights=None)
+        num_ftrs = model.fc.in_features
+        model.fc = nn.Linear(num_ftrs, num_classes)
+    elif model_name == 'efficientnet_b0':
+        model = models.efficientnet_b0(weights=None)
+        num_ftrs = model.classifier[1].in_features
+        model.classifier[1] = nn.Linear(num_ftrs, num_classes)
+    elif model_name == 'efficientnet_b4':
+        model = models.efficientnet_b4(weights=None)
+        num_ftrs = model.classifier[1].in_features
+        model.classifier[1] = nn.Linear(num_ftrs, num_classes)
+    elif model_name == 'efficientnet_v2_s':
+        model = models.efficientnet_v2_s(weights=None)
+        num_ftrs = model.classifier[1].in_features
+        model.classifier[1] = nn.Linear(num_ftrs, num_classes)
+    elif model_name == 'convnext_base':
+        model = models.convnext_base(weights=None)
+        num_ftrs = model.classifier[2].in_features
+        model.classifier[2] = nn.Linear(num_ftrs, num_classes)
+    elif model_name == 'mobilenet_v3_large':
+        model = models.mobilenet_v3_large(weights=None)
+        num_ftrs = model.classifier[3].in_features
+        model.classifier[3] = nn.Linear(num_ftrs, num_classes)
+    else:
+        raise ValueError(f"Unknown model: {model_name}")
+    return model
+
+
+def _predict_logits_with_tta(model: nn.Module, img_tensor: torch.Tensor,
+                             tta_views: int = 1) -> torch.Tensor:
+    """Run inference with optional flip-based test-time augmentation."""
+    views = [img_tensor]
+    if tta_views > 1:
+        views.append(torch.flip(img_tensor, dims=[3]))
+    if tta_views > 2:
+        views.append(torch.flip(img_tensor, dims=[2]))
+    if tta_views > 3:
+        views.append(torch.flip(img_tensor, dims=[2, 3]))
+
+    max_views = min(max(1, int(tta_views)), len(views))
+    logits_sum = None
+    for i in range(max_views):
+        view = views[i]
+        if device.type == 'cuda':
+            with torch.amp.autocast(device_type='cuda', enabled=True):
+                logits = model(view)
+        else:
+            logits = model(view)
+        logits_sum = logits if logits_sum is None else (logits_sum + logits)
+    return logits_sum / float(max_views)
+
+
 def load_model_and_config():
     """Load the best trained model and configuration"""
-    global model, device, class_names, transform, dataset
-    
+    global model, device, class_names, transform, dataset, dataset_index, inference_tta_views
     # Load report to get model info
     report_path = RUNS_DIR / "report.json"
     if not report_path.exists():
@@ -70,6 +155,9 @@ def load_model_and_config():
         report = json.load(f)
     
     best_model_name = report['best_model_name']
+    train_cfg = report.get("config", {})
+    inference_tta_views = int(train_cfg.get("tta_num_views", 1)) if train_cfg.get("eval_tta", False) else 1
+    
     
     # Setup device
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -86,18 +174,16 @@ def load_model_and_config():
     # Load dataset for class names and analysis (with transforms)
     dataset = Food101(root=str(DATA_DIR), split='test', download=False, transform=transform)
     class_names = dataset.classes
+    dataset_index = build_dataset_index(split="test", classes=class_names)
+    if len(dataset_index) != len(dataset):
+        raise RuntimeError(
+            f"Dataset index size mismatch: metadata={len(dataset_index)} dataset={len(dataset)}"
+        )
     
+   
     # Create model architecture
-    if best_model_name == 'resnet50':
-        model = models.resnet50(weights=None)
-        num_ftrs = model.fc.in_features
-        model.fc = nn.Linear(num_ftrs, len(class_names))
-    elif best_model_name == 'efficientnet_b0':
-        model = models.efficientnet_b0(weights=None)
-        num_ftrs = model.classifier[1].in_features
-        model.classifier[1] = nn.Linear(num_ftrs, len(class_names))
-    else:
-        raise ValueError(f"Unknown model: {best_model_name}")
+    model = build_model(best_model_name, len(class_names))
+
     
     # Load trained weights
     model_path = RUNS_DIR / "best_model.pth"
@@ -182,12 +268,10 @@ async def predict(file: UploadFile = File(...)):
         # Transform and predict
         img_tensor = transform(image).unsqueeze(0).to(device)
         
+          
         with torch.no_grad():
-            if device.type == 'cuda':
-                with torch.cuda.amp.autocast():
-                    output = model(img_tensor)
-            else:
-                output = model(img_tensor)
+            output = _predict_logits_with_tta(model, img_tensor, tta_views=inference_tta_views)
+
             
             # Get probabilities
             probs = torch.nn.functional.softmax(output, dim=1)
@@ -219,7 +303,7 @@ async def get_random_dataset_image(split: str = "test", category: str = None):
     Optionally filter by category name
     Returns image path and true label
     """
-    if dataset is None:
+    if dataset is None or dataset_index is None:
         raise HTTPException(status_code=503, detail="Dataset not loaded")
     
     # If category specified, filter by it
@@ -231,7 +315,7 @@ async def get_random_dataset_image(split: str = "test", category: str = None):
             raise HTTPException(status_code=404, detail=f"Category not found: {category}")
         
         # Find all indices for this class
-        matching_indices = [i for i, label in enumerate(dataset._labels) if label == class_idx]
+        matching_indices = [item["index"] for item in dataset_index if item["label_index"] == class_idx]
         
         if not matching_indices:
             raise HTTPException(status_code=404, detail=f"No images found for category: {category}")
@@ -242,30 +326,26 @@ async def get_random_dataset_image(split: str = "test", category: str = None):
         # Get random sample from entire dataset
         idx = random.randint(0, len(dataset) - 1)
     
-    img_path, label = dataset._image_files[idx], dataset._labels[idx]
+    sample = dataset_index[idx]
     
     return {
         "index": idx,
-        "image_path": str(img_path),
-        "true_label": class_names[label],
-        "label_index": label
+        "image_path": sample["image_path"],
+        "true_label": sample["label_name"],
+        "label_index": sample["label_index"]
     }
 
 
 @app.get("/dataset/image/{index}")
 async def get_dataset_image(index: int, split: str = "test"):
     """Get specific image from dataset by index"""
-    if dataset is None:
+    if dataset is None or dataset_index is None:
         raise HTTPException(status_code=503, detail="Dataset not loaded")
     
     if index < 0 or index >= len(dataset):
         raise HTTPException(status_code=404, detail="Image index out of range")
     
-    # Get raw image path (not the transformed tensor)
-    img_path = dataset._image_files[index]
-    
-    # Return the actual image file
-    full_path = DATA_DIR / img_path
+    full_path = Path(dataset_index[index]["image_path"])
     if not full_path.exists():
         raise HTTPException(status_code=404, detail="Image file not found")
     
@@ -346,7 +426,7 @@ async def get_per_class_performance(force_recalculate: bool = False):
         return data
     
     # If no cache or force recalculate, compute it
-    if model is None or dataset is None:
+    if model is None or dataset is None or dataset_index is None:
         raise HTTPException(status_code=503, detail="Model not loaded")
     
     print("⚠️  Cache not found or recalculation requested.")
@@ -425,17 +505,18 @@ async def get_per_class_performance(force_recalculate: bool = False):
     
     # Compile results
     results = []
+    first_index_for_label = {}
+    for item in dataset_index:
+        label_idx = item["label_index"]
+        if label_idx not in first_index_for_label:
+            first_index_for_label[label_idx] = item["index"]
+
     for i, class_name in enumerate(class_names):
         if class_total[i] > 0:
             accuracy = (class_correct[i] / class_total[i]) * 100
             avg_confidence = sum(class_confidence[i]) / len(class_confidence[i]) * 100
             
-            # Get a sample image for this class
-            sample_idx = None
-            for idx, label in enumerate(dataset._labels):
-                if label == i:
-                    sample_idx = idx
-                    break
+            sample_idx = first_index_for_label.get(i)
             
             results.append({
                 "class_name": class_name,
