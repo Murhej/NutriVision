@@ -1,4 +1,4 @@
-"""
+﻿"""
 Utility functions for Food-101 classification pipeline
 """
 
@@ -33,18 +33,18 @@ def set_seed(seed: int = 42, enable_cudnn_benchmark: bool = True):
     if enable_cudnn_benchmark:
         torch.backends.cudnn.benchmark = True
         torch.backends.cudnn.deterministic = False
-        print("✓ cuDNN benchmark enabled for faster GPU training")
+        print(" cuDNN benchmark enabled for faster GPU training")
     else:
         torch.backends.cudnn.deterministic = True
         torch.backends.cudnn.benchmark = False
-        print("✓ Deterministic mode enabled (slower but reproducible)")
+        print(" Deterministic mode enabled (slower but reproducible)")
 
 
 def get_device():
     """Detect and return best available device with detailed GPU info"""
     if torch.cuda.is_available():
         device = torch.device('cuda')
-        print(f"✓ Using GPU: {torch.cuda.get_device_name(0)}")
+        print(f" Using GPU: {torch.cuda.get_device_name(0)}")
         
         # Display GPU memory info
         total_memory = torch.cuda.get_device_properties(0).total_memory / 1e9
@@ -55,7 +55,7 @@ def get_device():
         print("  GPU cache cleared")
     else:
         device = torch.device('cpu')
-        print("✓ Using CPU")
+        print(" Using CPU")
         print("  WARNING: Training on CPU will be significantly slower!")
         print("  Consider using a GPU for faster training.")
     return device
@@ -124,7 +124,7 @@ def plot_class_distribution(dataset, output_path: str, title: str = "Food-101 Cl
     plt.tight_layout()
     plt.savefig(output_path, dpi=150, bbox_inches='tight')
     plt.close('all')
-    print(f"✓ Saved class distribution to {output_path}")
+    print(f" Saved class distribution to {output_path}")
 
 
 def plot_sample_grid(dataset, output_path: str, n_samples: int = 16):
@@ -138,7 +138,7 @@ def plot_sample_grid(dataset, output_path: str, n_samples: int = 16):
     """
     from torch.utils.data import Subset
     
-    print("  → Generating sample image grid...")
+    print("   Generating sample image grid...")
     
     # Get original dataset if this is a Subset
     original_dataset = dataset.dataset if isinstance(dataset, Subset) else dataset
@@ -174,7 +174,7 @@ def plot_sample_grid(dataset, output_path: str, n_samples: int = 16):
     plt.tight_layout()
     plt.savefig(output_path, dpi=150, bbox_inches='tight')
     plt.close('all')
-    print(f"✓ Saved sample grid to {output_path}")
+    print(f" Saved sample grid to {output_path}")
 
 
 def plot_training_curves(history: dict, model_name: str, output_dir: str):
@@ -200,7 +200,7 @@ def plot_training_curves(history: dict, model_name: str, output_dir: str):
     loss_path = os.path.join(output_dir, f'{model_name}_loss.png')
     plt.savefig(loss_path, dpi=150, bbox_inches='tight')
     plt.close()
-    print(f"  → Saved loss curve to {loss_path}")
+    print(f"   Saved loss curve to {loss_path}")
     
     # Accuracy curves
     plt.figure(figsize=(10, 6))
@@ -217,7 +217,7 @@ def plot_training_curves(history: dict, model_name: str, output_dir: str):
     acc_path = os.path.join(output_dir, f'{model_name}_accuracy.png')
     plt.savefig(acc_path, dpi=150, bbox_inches='tight')
     plt.close()
-    print(f"  → Saved accuracy curve to {acc_path}")
+    print(f"   Saved accuracy curve to {acc_path}")
 
 
 def plot_confusion_matrix(y_true: np.ndarray, y_pred: np.ndarray, 
@@ -259,7 +259,7 @@ def plot_confusion_matrix(y_true: np.ndarray, y_pred: np.ndarray,
     plt.tight_layout()
     plt.savefig(output_path, dpi=150, bbox_inches='tight')
     plt.close()
-    print(f"  → Saved confusion matrix to {output_path}")
+    print(f"   Saved confusion matrix to {output_path}")
 
 
 def save_sample_predictions(model, dataset, device, class_names: List[str], 
@@ -300,4 +300,5 @@ def save_sample_predictions(model, dataset, device, class_names: List[str],
                 f.write(f"    {i+1}. {pred_class}: {prob:.2f}%\n")
             f.write("\n")
     
-    print(f"  → Saved sample predictions to {output_path}")
+    print(f"   Saved sample predictions to {output_path}")
+
