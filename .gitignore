@@ -47,3 +47,7 @@ Thumbs.db
 
 # Logs
 *.log
+
+# Local secrets
+.env
+.env.local
