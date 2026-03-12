@@ -1,172 +1,222 @@
+from __future__ import annotations
+
+import json
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Dict, Optional
 
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
-from typing import Optional
+from pydantic import BaseModel, Field
 
 from src.food_mapper import (
     FOOD_VARIANTS,
     _normalize_label,
-    build_query,
+    build_external_api_queries,
+    build_follow_up_questions,
+    build_candidate_queries,
     fetch_nutrition,
+    get_last_nutrition_error,
     handle_unknown_food,
+    scale_nutrition,
 )
 
-mapper_router = APIRouter(prefix="/map", tags=["Food Mapping"])
 
+mapper_router = APIRouter(prefix="/map", tags=["Nutrition Mapping"])
 
-# ---------------------------------------------------------------------------
-# REQUEST / RESPONSE MODELS
-# ---------------------------------------------------------------------------
+BASE_DIR = Path(__file__).resolve().parent.parent
+OUTPUTS_DIR = BASE_DIR / "outputs"
+MEAL_LOG_PATH = OUTPUTS_DIR / "meal_logs.json"
+
+PORTION_PRESETS = {
+    "small": {"label": "Small", "multiplier": 0.68, "grams": 115, "ounces": 4},
+    "medium": {"label": "Medium", "multiplier": 1.0, "grams": 170, "ounces": 6},
+    "large": {"label": "Large", "multiplier": 1.32, "grams": 225, "ounces": 8},
+    "extra_large": {"label": "Extra Large", "multiplier": 1.68, "grams": 285, "ounces": 10},
+}
+
 
 class FoodMappingRequest(BaseModel):
-    """Client sends the AI-predicted food label + any variant answers."""
-    food_label: str                      # e.g. "pizza"
-    variants: Optional[dict] = {}        # e.g. {"size": "large", "crust": "thin crust", "type": "pepperoni", "slices": "2"}
+    food_label: str = Field(..., example="pizza")
+    user_description: Optional[str] = Field(default=None, example="2 slices pepperoni pizza with extra cheese")
+    variants: Optional[Dict] = Field(default_factory=dict)
+    portion_id: str = Field(default="medium", example="medium")
+    portion_multiplier: Optional[float] = Field(default=None, example=1.0)
+
 
 class NutritionQueryRequest(BaseModel):
-    """Direct natural-language nutrition query."""
-    query: str                           # e.g. "2 slices large thin crust pepperoni pizza"
+    query: str = Field(..., example="2 slices pepperoni pizza")
 
-class UnknownFoodRequest(BaseModel):
+
+class MealLogRequest(BaseModel):
     food_label: str
-    user_description: Optional[str] = None  # what the user thinks it is
+    display_name: Optional[str] = None
+    comment: Optional[str] = None
+    portion_id: str = "medium"
+    portion_label: Optional[str] = None
+    portion_multiplier: float = 1.0
+    nutrition: Dict = Field(default_factory=dict)
+    prediction: Optional[Dict] = None
+    source: Optional[str] = None
+    image_url: Optional[str] = None
 
 
-# ---------------------------------------------------------------------------
-# ENDPOINT 1 — Get variant questions for a food (client polls this first)
-# ---------------------------------------------------------------------------
+def _resolve_portion(request_portion_id: str, request_multiplier: Optional[float]) -> Dict:
+    preset = PORTION_PRESETS.get(request_portion_id, PORTION_PRESETS["medium"]).copy()
+    if request_multiplier is not None:
+        preset["multiplier"] = max(0.25, min(float(request_multiplier), 4.0))
+    preset["id"] = request_portion_id if request_portion_id in PORTION_PRESETS else "medium"
+    return preset
+
+
+def _append_meal_log(entry: Dict) -> Dict:
+    OUTPUTS_DIR.mkdir(parents=True, exist_ok=True)
+    if MEAL_LOG_PATH.exists():
+        with open(MEAL_LOG_PATH, "r", encoding="utf-8") as file:
+            existing = json.load(file)
+    else:
+        existing = []
+
+    existing.append(entry)
+    with open(MEAL_LOG_PATH, "w", encoding="utf-8") as file:
+        json.dump(existing, file, indent=2)
+    return entry
+
+
 @mapper_router.get("/variants/{food_label}")
 def get_variants(food_label: str):
-    """
-    Returns the list of clarifying questions for a complex food.
-    Returns an empty list for simple foods that don't need extra detail.
-
-    Example:
-      GET /map/variants/pizza
-      → {"food_label": "pizza", "needs_variants": true, "questions": [...]}
-    """
     key = _normalize_label(food_label)
     questions = FOOD_VARIANTS.get(key, [])
     return {
-        "food_label":    food_label,
+        "food_label": food_label,
         "needs_variants": len(questions) > 0,
-        "questions":     questions,
+        "questions": questions,
     }
 
 
-# ---------------------------------------------------------------------------
-# ENDPOINT 2 — Full food mapping (variant answers → nutrition)
-# ---------------------------------------------------------------------------
+@mapper_router.get("/portions")
+def get_portion_presets():
+    return {"portions": PORTION_PRESETS}
+
+
 @mapper_router.post("/food")
 def map_food(request: FoodMappingRequest):
-    """
-    Main endpoint. Takes an AI-predicted food label + optional variant answers.
-
-    Flow:
-      1. If food has variants and none supplied → return the questions (client should ask user first)
-      2. Build a precise NL query
-      3. Fetch from Nutritionix
-      4. If not found → return guidance
-
-    Example request:
-      {
-        "food_label": "pizza",
-        "variants": {
-          "size":   "large (14\")",
-          "crust":  "thin crust",
-          "type":   "pepperoni",
-          "slices": "2"
-        }
-      }
-    """
     label = request.food_label.strip()
-    key   = _normalize_label(label)
+    if not label:
+        raise HTTPException(status_code=400, detail="Food label cannot be empty.")
 
-    # If this food has variants but the client sent none, return the questions
-    if key in FOOD_VARIANTS and not request.variants:
-        questions = FOOD_VARIANTS[key]
+    key = _normalize_label(label)
+    portion = _resolve_portion(request.portion_id, request.portion_multiplier)
+    queries = build_candidate_queries(label, request.variants or {}, request.user_description)
+    questions = FOOD_VARIANTS.get(key, [])
+
+    for query in queries:
+        nutrition = fetch_nutrition(query)
+        if nutrition:
+            scaled_nutrition = scale_nutrition(nutrition, portion["multiplier"])
+            display_name = label.replace("_", " ")
+            return {
+                "status": "found",
+                "food_label": label,
+                "display_name": display_name,
+                "query_used": query,
+                "queries_tried": queries,
+                "variants_selected": request.variants or {},
+                "questions": questions,
+                "portion": portion,
+                "base_nutrition": nutrition,
+                "nutrition": scaled_nutrition,
+            }
+
+    last_error = get_last_nutrition_error()
+    if last_error and last_error.get("kind") in {"network", "dependency", "auth", "rate_limit", "http_error"}:
         return {
-            "status":        "needs_variants",
-            "food_label":    label,
-            "message":       f"Please answer these questions so we can get accurate nutrition for '{label}':",
-            "questions":     questions,
+            "status": "provider_error",
+            "food_label": label,
+            "display_name": label.replace("_", " "),
+            "message": last_error.get("message") or "Could not reach the nutrition provider.",
+            "provider": last_error.get("provider") or "nutrition_provider",
+            "query_used": last_error.get("query"),
+            "queries_tried": queries,
+            "portion": portion,
+            "questions": questions,
+            "follow_up_questions": build_follow_up_questions(label, queries),
+            "external_api_queries": build_external_api_queries(label, queries, request.user_description),
         }
 
-    # Build query and fetch nutrition
-    query     = build_query(label, request.variants or {})
-    nutrition = fetch_nutrition(query)
-
-    if nutrition:
-        return {
-            "status":             "found",
-            "food_label":         label,
-            "query_used":         query,
-            "variants_selected":  request.variants,
-            "nutrition":          nutrition,
-        }
-
-    # Not found — return guidance
-    return handle_unknown_food(label)
+    response = handle_unknown_food(
+        request.user_description or label,
+        attempted_queries=queries,
+        user_description=request.user_description,
+    )
+    response["queries_tried"] = queries
+    response["portion"] = portion
+    response["questions"] = questions
+    return response
 
 
-# ---------------------------------------------------------------------------
-# ENDPOINT 3 — Direct natural-language query (power-user / manual search)
-# ---------------------------------------------------------------------------
 @mapper_router.post("/nutrition")
 def get_nutrition_by_query(request: NutritionQueryRequest):
-    """
-    Fetch nutrition for any free-text query string.
-
-    Example:
-      POST /map/nutrition
-      {"query": "100g grilled salmon with olive oil"}
-    """
-    if not request.query.strip():
+    query = request.query.strip()
+    if not query:
         raise HTTPException(status_code=400, detail="Query cannot be empty.")
 
-    nutrition = fetch_nutrition(request.query)
-
+    nutrition = fetch_nutrition(query)
     if nutrition:
         return {"status": "found", "nutrition": nutrition}
 
+    last_error = get_last_nutrition_error()
+    if last_error and last_error.get("kind") in {"network", "dependency", "auth", "rate_limit", "http_error"}:
+        return {
+            "status": "provider_error",
+            "provider": last_error.get("provider") or "nutrition_provider",
+            "message": last_error.get("message") or "Could not reach the nutrition provider.",
+            "query_used": last_error.get("query") or query,
+            "follow_up_questions": build_follow_up_questions(query, [query]),
+            "external_api_queries": build_external_api_queries(query, [query]),
+        }
+
     return {
-        "status":  "not_found",
-        "message": f"No nutrition data found for '{request.query}'.",
+        "status": "not_found",
+        "message": f"No nutrition data found for '{query}'.",
+        "follow_up_questions": build_follow_up_questions(query, [query]),
+        "external_api_queries": build_external_api_queries(query, [query]),
         "tips": [
-            "Try being more specific (e.g., 'grilled chicken breast 150g')",
-            "Use common food names rather than dish names",
-            "Search manually at https://www.nutritionix.com",
+            "Try a more specific serving description",
+            "Use common food names rather than only dish names",
+            "Search manually at https://www.edamam.com/",
         ],
     }
 
 
-# ---------------------------------------------------------------------------
-# ENDPOINT 4 — Unknown food handler (user reports a food the AI can't identify)
-# ---------------------------------------------------------------------------
-@mapper_router.post("/unknown")
-def report_unknown_food(request: UnknownFoodRequest):
-    """
-    Called when the AI model couldn't classify the food OR the API couldn't find it.
-    If user provides a description, we try to query the API with that description first.
+@mapper_router.post("/log")
+def save_meal_log(request: MealLogRequest):
+    if not request.food_label.strip():
+        raise HTTPException(status_code=400, detail="Food label cannot be empty.")
 
-    Example:
-      POST /map/unknown
-      {"food_label": "some dish", "user_description": "Nigerian egusi soup with fufu"}
-    """
-    # If user described it, try the description first
-    if request.user_description:
-        nutrition = fetch_nutrition(request.user_description)
-        if nutrition:
-            return {
-                "status":            "found_via_description",
-                "original_label":    request.food_label,
-                "query_used":        request.user_description,
-                "nutrition":         nutrition,
-            }
+    entry = {
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "food_label": request.food_label,
+        "display_name": request.display_name or request.food_label.replace("_", " "),
+        "comment": request.comment,
+        "portion_id": request.portion_id,
+        "portion_label": request.portion_label or PORTION_PRESETS.get(request.portion_id, PORTION_PRESETS["medium"])["label"],
+        "portion_multiplier": max(0.25, min(float(request.portion_multiplier), 4.0)),
+        "nutrition": request.nutrition,
+        "prediction": request.prediction,
+        "source": request.source,
+        "image_url": request.image_url,
+    }
+    saved = _append_meal_log(entry)
+    return {"status": "saved", "entry": saved}
 
-    # Still not found — return structured guidance
-    guidance = handle_unknown_food(
-        request.user_description or request.food_label
-    )
-    guidance["original_label"] = request.food_label
-    return guidance
+
+@mapper_router.get("/logs")
+def get_meal_logs(limit: int = 20):
+    if not MEAL_LOG_PATH.exists():
+        return {"entries": [], "count": 0}
+
+    with open(MEAL_LOG_PATH, "r", encoding="utf-8") as file:
+        entries = json.load(file)
+
+    sliced = list(reversed(entries[-max(1, min(limit, 100)):]))
+    return {"entries": sliced, "count": len(entries)}
