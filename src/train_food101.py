@@ -48,9 +48,10 @@ class Config:
     # Training settings
     batch_size: int = 32          # Automatically adjusted for GPU/CPU
     num_workers: int = 4          # Automatically adjusted for GPU/CPU
+    
     windows_stable_dataloader: bool = True  # Safer default on Windows + CUDA
     skip_unstable_windows_cuda_models: bool = True
-    force_vit_gpu_on_windows: bool = True
+    force_vit_cpu: bool = True
     prioritize_gpu_stable_models: bool = True
     disable_tf32_on_windows_cuda: bool = True
     
@@ -618,7 +619,6 @@ def _is_cuda_runtime_failure(err_msg: str) -> bool:
         "cuda out of memory",
         "cudnn_status",
         "cuda error",
-        "cuda runtime failure",
         "illegal memory access",
         "illegal instruction",
         "unspecified launch failure",
@@ -626,6 +626,29 @@ def _is_cuda_runtime_failure(err_msg: str) -> bool:
         "cublas_status_alloc_failed",
     )
     return any(token in err_msg for token in cuda_error_tokens)
+
+
+def _is_cuda_context_corruption(err_msg: str) -> bool:
+    corruption_tokens = (
+        "illegal memory access",
+        "illegal instruction",
+        "unspecified launch failure",
+        "device-side assert triggered",
+    )
+    return any(token in err_msg for token in corruption_tokens)
+
+
+def _safe_cuda_empty_cache() -> bool:
+    if not torch.cuda.is_available():
+        return True
+    try:
+        torch.cuda.empty_cache()
+        return True
+    except RuntimeError as cache_err:
+        cache_msg = str(cache_err).lower()
+        if _is_cuda_runtime_failure(cache_msg):
+            return False
+        raise
 
 
 def _forward_with_chunk_retry(
@@ -649,10 +672,12 @@ def _forward_with_chunk_retry(
         err_msg = str(err).lower()
         if device.type != "cuda" or not _is_cuda_runtime_failure(err_msg) or inputs.size(0) <= 1:
             raise
+        if _is_cuda_context_corruption(err_msg):
+            raise
         mid = inputs.size(0) // 2
         if mid <= 0:
             raise
-        torch.cuda.empty_cache()
+        _safe_cuda_empty_cache()
         left = _forward_with_chunk_retry(
             model,
             inputs[:mid],
@@ -680,6 +705,7 @@ def evaluate_with_retries(
     use_amp: bool = False,
     use_tta: bool = False,
     tta_views: int = 2,
+    cpu_fallback_model: Optional[nn.Module] = None,
 ) -> Tuple:
     """Evaluate with a CUDA-safe retry that disables AMP/TTA on failure."""
     try:
@@ -696,12 +722,45 @@ def evaluate_with_retries(
         err_msg = str(err).lower()
         if device.type != "cuda" or not _is_cuda_runtime_failure(err_msg):
             raise
+        if cpu_fallback_model is None:
+            cpu_fallback_model = deepcopy(model).to(torch.device("cpu")).eval()
+        cpu_loader = _make_cpu_fallback_loader(loader, shuffle=False)
+
+        if _is_cuda_context_corruption(err_msg):
+            print("CUDA eval failed; falling back directly to CPU evaluation...")
+            return evaluate(
+                cpu_fallback_model,
+                cpu_loader,
+                torch.device("cpu"),
+                return_predictions=return_predictions,
+                use_amp=False,
+                use_tta=False,
+                tta_views=1,
+            )
+
         print("CUDA eval failed; retrying with AMP/TTA disabled...")
-        torch.cuda.empty_cache()
+        cache_ok = _safe_cuda_empty_cache()
+        if cache_ok:
+            try:
+                return evaluate(
+                    model,
+                    loader,
+                    device,
+                    return_predictions=return_predictions,
+                    use_amp=False,
+                    use_tta=False,
+                    tta_views=1,
+                )
+            except RuntimeError as retry_err:
+                retry_msg = str(retry_err).lower()
+                if device.type != "cuda" or not _is_cuda_runtime_failure(retry_msg):
+                    raise
+
+        print("CUDA eval retry failed; falling back to CPU evaluation...")
         return evaluate(
-            model,
-            loader,
-            device,
+            cpu_fallback_model,
+            cpu_loader,
+            torch.device("cpu"),
             return_predictions=return_predictions,
             use_amp=False,
             use_tta=False,
@@ -1053,9 +1112,18 @@ def get_param_groups(model: nn.Module, model_name: str, base_lr: float):
         {"params": head_params, "lr": base_lr / 5},
     ]
 
+
+def format_metric_delta_text(current_value: float, baseline_value: float | None) -> str:
+    if baseline_value is None:
+        return f"{current_value:.2f}%"
+    delta = current_value - baseline_value
+    sign = "+" if delta >= 0 else ""
+    return f"{current_value:.2f}% ({sign}{delta:.2f})"
+
 def train_model(model: nn.Module, model_name: str, train_loader: DataLoader,
                 val_loader: DataLoader, test_loader: DataLoader,
-                config: Config, device: torch.device) -> Dict:
+                config: Config, device: torch.device,
+                comparison_metrics: Dict[str, float] | None = None) -> Dict:
     """
     Train a model with two-stage fine-tuning
     
@@ -1096,6 +1164,14 @@ def train_model(model: nn.Module, model_name: str, train_loader: DataLoader,
     
     if ema_model is not None:
         print(f"  -> EMA enabled (decay={config.ema_decay})")
+    if comparison_metrics:
+        print(
+            "  Baseline to beat: "
+            f"Val Top-1 {comparison_metrics.get('val_top1_accuracy', 0.0):.2f}% | "
+            f"Val Top-3 {comparison_metrics.get('val_top3_accuracy', 0.0):.2f}% | "
+            f"Test Top-1 {comparison_metrics.get('test_top1_accuracy', 0.0):.2f}% | "
+            f"Test Top-3 {comparison_metrics.get('test_top3_accuracy', 0.0):.2f}%"
+        )
 
     history = {
         'train_loss': [],
@@ -1169,11 +1245,15 @@ def train_model(model: nn.Module, model_name: str, train_loader: DataLoader,
                 else:
                     raise
             eval_model = ema_model if ema_model is not None else model
+            cpu_eval_fallback_model = None
+            if device.type == "cuda" and platform.system() == "Windows":
+                cpu_eval_fallback_model = deepcopy(eval_model).to(torch.device("cpu")).eval()
             val_top1, val_top3 = evaluate_with_retries(
                 eval_model, val_loader, device,
                 use_amp=amp_enabled,
                 use_tta=config.val_tta,
-                tta_views=config.tta_num_views
+                tta_views=config.tta_num_views,
+                cpu_fallback_model=cpu_eval_fallback_model,
             )
             global_epoch += 1
             
@@ -1186,6 +1266,12 @@ def train_model(model: nn.Module, model_name: str, train_loader: DataLoader,
             print(f"  Train Loss: {train_loss:.4f} | "
                   f"Train Top-1: {train_top1:.2f}% | Train Top-3: {train_top3:.2f}%")
             print(f"  Val Top-1: {val_top1:.2f}% | Val Top-3: {val_top3:.2f}%")
+            if comparison_metrics:
+                print(
+                    "  Val vs baseline: "
+                    f"Top-1 {format_metric_delta_text(val_top1, comparison_metrics.get('val_top1_accuracy'))} | "
+                    f"Top-3 {format_metric_delta_text(val_top3, comparison_metrics.get('val_top3_accuracy'))}"
+                )
     
             scheduler.step()
 
@@ -1276,11 +1362,15 @@ def train_model(model: nn.Module, model_name: str, train_loader: DataLoader,
                 else:
                     raise
             eval_model = ema_model if ema_model is not None else model
+            cpu_eval_fallback_model = None
+            if device.type == "cuda" and platform.system() == "Windows":
+                cpu_eval_fallback_model = deepcopy(eval_model).to(torch.device("cpu")).eval()
             val_top1, val_top3 = evaluate_with_retries(
                 eval_model, val_loader, device,
                 use_amp=amp_enabled,
                 use_tta=config.val_tta,
-                tta_views=config.tta_num_views
+                tta_views=config.tta_num_views,
+                cpu_fallback_model=cpu_eval_fallback_model,
             )
             global_epoch += 1
             history['train_loss'].append(train_loss)
@@ -1292,6 +1382,12 @@ def train_model(model: nn.Module, model_name: str, train_loader: DataLoader,
             print(f"  Train Loss: {train_loss:.4f} | "
                   f"Train Top-1: {train_top1:.2f}% | Train Top-3: {train_top3:.2f}%")
             print(f"  Val Top-1: {val_top1:.2f}% | Val Top-3: {val_top3:.2f}%")
+            if comparison_metrics:
+                print(
+                    "  Val vs baseline: "
+                    f"Top-1 {format_metric_delta_text(val_top1, comparison_metrics.get('val_top1_accuracy'))} | "
+                    f"Top-3 {format_metric_delta_text(val_top3, comparison_metrics.get('val_top3_accuracy'))}"
+                )
     
             scheduler.step()
 
@@ -1351,7 +1447,8 @@ def train_model(model: nn.Module, model_name: str, train_loader: DataLoader,
             return_predictions=True,
             use_amp=safe_eval_amp,
             use_tta=eval_use_tta,
-            tta_views=eval_tta_views
+            tta_views=eval_tta_views,
+            cpu_fallback_model=cpu_fallback_model,
         )
     except RuntimeError as err:
         err_msg = str(err).lower()
@@ -1376,6 +1473,12 @@ def train_model(model: nn.Module, model_name: str, train_loader: DataLoader,
     print(f"\n Training complete!")
     print(f"  Final Test Top-1 Accuracy: {final_top1:.2f}%")
     print(f"  Final Test Top-3 Accuracy: {final_top3:.2f}%")
+    if comparison_metrics:
+        print(
+            "  Test vs baseline: "
+            f"Top-1 {format_metric_delta_text(final_top1, comparison_metrics.get('test_top1_accuracy'))} | "
+            f"Top-3 {format_metric_delta_text(final_top3, comparison_metrics.get('test_top3_accuracy'))}"
+        )
     print("="*60)
     
     return {
@@ -1435,7 +1538,7 @@ def main():
     print(f"Test TTA: {config.eval_tta} (views={config.tta_num_views})")
     print(f"Windows stable dataloader: {config.windows_stable_dataloader}")
     print(f"Skip unstable Windows CUDA models: {config.skip_unstable_windows_cuda_models}")
-    print(f"Force vit_b_16 GPU on Windows: {config.force_vit_gpu_on_windows}")
+    print(f"Force vit_b_16 on CPU: {config.force_vit_cpu}")
     print(f"Prioritize GPU-stable models: {config.prioritize_gpu_stable_models}")
     print(f"Disable TF32 on Windows CUDA: {config.disable_tf32_on_windows_cuda}")
     print(f"Early stopping patience: {config.early_stopping_patience}")
@@ -1484,15 +1587,9 @@ def main():
         if device.type == 'cuda' and cuda_runtime_broken:
             run_device = torch.device('cpu')
             print(f"CUDA context is unstable; running {model_name} on CPU fallback.")
-        elif (
-            is_windows_cuda
-            and model_name == 'vit_b_16'
-            and not config.force_vit_gpu_on_windows
-        ):
+        elif model_name == 'vit_b_16' and config.force_vit_cpu:
             run_device = torch.device('cpu')
-            print("Windows CUDA stability: running vit_b_16 on CPU to avoid illegal memory access.")
-        elif is_windows_cuda and model_name == 'vit_b_16':
-            print("Windows CUDA stability: forcing vit_b_16 to run on GPU as requested.")
+            print("Device override: running vit_b_16 on CPU.")
 
         if (
             run_device.type == 'cuda'
@@ -1646,6 +1743,8 @@ def main():
     # Save report
     report = {
         'best_model_name': best_model_name,
+        'class_names': class_names,
+        'num_classes': len(class_names),
         'best_model_metrics': {
             'val_top1_accuracy': best_result['best_val_top1'],
             'val_top3_accuracy': best_result['best_val_top3'],
