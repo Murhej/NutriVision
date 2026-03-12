@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NutriVision - Calorie Estimate Correction</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="app-shell">
+        <div class="ambient ambient-one"></div>
+        <div class="ambient ambient-two"></div>
+
+        <main class="phone-frame">
+            <header class="screen-header">
+                <button id="backToMainBtn" class="icon-button" type="button" aria-label="Back to main">&#8249;</button>
+                <div class="header-copy">
+                    <p class="header-kicker">NutriVision</p>
+                    <h1>Calorie Estimate Correction</h1>
+                </div>
+                <a href="index.html" class="header-link">Main</a>
+            </header>
+
+            <section class="analysis-card">
+                <div class="card-intro">
+                    <h2>Help correct the meal</h2>
+                    <p>Upload 3 clear photos and give structured meal details so the sample can be saved in the training submissions folder and used for a better calorie estimate.</p>
+                </div>
+
+                <div id="draftContext" class="draft-context hidden">
+                    <img id="draftPreview" class="draft-preview" alt="Current meal preview">
+                    <div class="draft-copy">
+                        <strong id="draftMealName">Current prediction</strong>
+                        <p id="draftPredictionHint" class="prediction-hint"></p>
+                    </div>
+                </div>
+
+                <div class="specificity-tip">
+                    Be specific. Good examples: `2 slices thin crust pepperoni pizza`, `150g peking duck with skin and pancakes`, `grilled salmon with 1 tbsp butter sauce`.
+                </div>
+            </section>
+
+            <form id="correctionForm" class="analysis-card correction-form">
+                <div class="section-title">
+                    <h3>Meal photos</h3>
+                    <p>Top, side, and inside views help with model review. Add the nutrition-facts label image too when you have packaging or a menu label.</p>
+                </div>
+
+                <div class="shot-grid">
+                    <label class="shot-card" for="topImage">
+                        <span class="shot-title">Top View</span>
+                        <span class="shot-desc">Full plate from above</span>
+                        <input id="topImage" name="top_image" type="file" accept="image/*" hidden required>
+                        <img id="topPreview" class="shot-preview hidden" alt="Top view preview">
+                        <span id="topStatus" class="shot-status">Upload image</span>
+                    </label>
+
+                    <label class="shot-card" for="sideImage">
+                        <span class="shot-title">Side View</span>
+                        <span class="shot-desc">Show thickness or stack</span>
+                        <input id="sideImage" name="side_image" type="file" accept="image/*" hidden required>
+                        <img id="sidePreview" class="shot-preview hidden" alt="Side view preview">
+                        <span id="sideStatus" class="shot-status">Upload image</span>
+                    </label>
+
+                    <label class="shot-card" for="insideImage">
+                        <span class="shot-title">Inside View</span>
+                        <span class="shot-desc">Cross-section or inside filling</span>
+                        <input id="insideImage" name="inside_image" type="file" accept="image/*" hidden required>
+                        <img id="insidePreview" class="shot-preview hidden" alt="Inside view preview">
+                        <span id="insideStatus" class="shot-status">Upload image</span>
+                    </label>
+
+                    <label class="shot-card" for="nutritionLabelImage">
+                        <span class="shot-title">Nutrition Facts</span>
+                        <span class="shot-desc">Package label or menu nutrition photo</span>
+                        <input id="nutritionLabelImage" name="nutrition_label_image" type="file" accept="image/*" hidden>
+                        <img id="nutritionLabelPreview" class="shot-preview hidden" alt="Nutrition facts preview">
+                        <span id="nutritionLabelStatus" class="shot-status">Optional image</span>
+                    </label>
+                </div>
+
+                <div class="form-grid">
+                    <div>
+                        <label class="field-label" for="mealName">Meal name</label>
+                        <input id="mealName" name="meal_name" class="text-input" type="text" placeholder="Example: peking duck" required>
+                    </div>
+
+                    <div>
+                        <label class="field-label" for="foodType">Food type</label>
+                        <input id="foodType" name="food_type" class="text-input" type="text" placeholder="Example: pizza, sushi, biscuit, duck">
+                    </div>
+
+                    <div>
+                        <label class="field-label" for="brandName">Brand or restaurant</label>
+                        <input id="brandName" name="brand_name" class="text-input" type="text" placeholder="Example: Domino's, McDonald's, Costco">
+                    </div>
+
+                    <div>
+                        <label class="field-label" for="portionSize">Portion size</label>
+                        <input id="portionSize" name="portion_size" class="text-input" type="text" placeholder="Example: 2 slices or 150g" required>
+                    </div>
+
+                    <div>
+                        <label class="field-label" for="nutritionFacts">Nutrition facts text</label>
+                        <input id="nutritionFacts" name="nutrition_facts" class="text-input" type="text" placeholder="Example: Calories 400, Fat 12g, Carbs 67g, Protein 6g">
+                    </div>
+
+                    <div>
+                        <label class="field-label" for="proteinType">Protein type</label>
+                        <input id="proteinType" name="protein_type" class="text-input" type="text" placeholder="Example: duck, beef, chicken">
+                    </div>
+
+                    <div>
+                        <label class="field-label" for="proteinAmount">Protein amount</label>
+                        <input id="proteinAmount" name="protein_amount" class="text-input" type="text" placeholder="Example: 120g">
+                    </div>
+
+                    <div>
+                        <label class="field-label" for="addedItems">Added items</label>
+                        <input id="addedItems" name="added_items" class="text-input" type="text" placeholder="Example: hoisin sauce, pancakes, rice">
+                    </div>
+
+                    <div>
+                        <label class="field-label" for="addedAmount">How much added</label>
+                        <input id="addedAmount" name="added_amount" class="text-input" type="text" placeholder="Example: 2 tbsp, 1 cup, 3 pieces">
+                    </div>
+                </div>
+
+                <label class="field-label" for="notes">Other details</label>
+                <textarea id="notes" name="notes" class="meal-textarea" rows="5" placeholder="Preparation, sauce amount, skin on/off, crust type, toppings, sides, and anything the model missed"></textarea>
+
+                <input id="predictedLabel" name="predicted_label" type="hidden">
+                <input id="predictionContext" name="prediction_context" type="hidden">
+
+                <button id="submitCorrectionBtn" class="cta-button" type="submit">Save correction and estimate calories</button>
+            </form>
+
+            <section id="correctionLoading" class="message-panel loading hidden">
+                <div class="spinner"></div>
+                <p>Saving your correction and estimating calories...</p>
+            </section>
+
+            <section id="correctionError" class="message-panel error hidden"></section>
+            <section id="correctionSuccess" class="message-panel success hidden"></section>
+
+            <section id="correctionResult" class="analysis-card hidden">
+                <div class="card-intro">
+                    <h2>Estimated nutrition</h2>
+                    <p>The backend used your structured details to estimate nutrition and saved this sample for review.</p>
+                </div>
+
+                <div class="macro-grid">
+                    <div class="macro-card accent-green">
+                        <span id="resultCalories" class="macro-value">0</span>
+                        <span class="macro-label">kcal</span>
+                    </div>
+                    <div class="macro-card accent-mint">
+                        <span id="resultProtein" class="macro-value">0g</span>
+                        <span class="macro-label">Protein</span>
+                    </div>
+                    <div class="macro-card accent-gold">
+                        <span id="resultCarbs" class="macro-value">0g</span>
+                        <span class="macro-label">Carbs</span>
+                    </div>
+                    <div class="macro-card accent-coral">
+                        <span id="resultFat" class="macro-value">0g</span>
+                        <span class="macro-label">Fat</span>
+                    </div>
+                </div>
+
+                <div id="resultQuery" class="notice-box"></div>
+            </section>
+        </main>
+    </div>
+
+    <script src="correction.js"></script>
+</body>
+</html>
