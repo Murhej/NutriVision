@@ -3,15 +3,15 @@ FastAPI server for Food-101 classification model
 Provides endpoints for inference and visualization
 """
 
-import os
 import json
 import random
-from pathlib import Path
-from typing import List, Dict
 import io
+from contextlib import asynccontextmanager
+from pathlib import Path
+from typing import Dict, List
 
-from fastapi import FastAPI, File, UploadFile, HTTPException
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 import torch
@@ -19,13 +19,29 @@ import torch.nn as nn
 from torchvision import transforms, models
 from torchvision.datasets import Food101
 from PIL import Image
-import numpy as np
+
+from src.api_mapper import mapper_router
+from src.feedback_api import feedback_router
+
+
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    """Load model artifacts once at application startup."""
+    try:
+        load_model_and_config()
+        print("[OK] API ready!")
+    except Exception as e:
+        print(f"Error loading model: {e}")
+        print("Please run training first: python -m src.train_food101")
+    yield
+
 
 # Initialize FastAPI app
 app = FastAPI(
     title="NutriVision API",
     description="Food-101 Classification API for Smart Meal Logger",
-    version="1.0.0"
+    version="1.0.0",
+    lifespan=lifespan,
 )
 
 # Enable CORS for frontend
@@ -40,6 +56,7 @@ app.add_middleware(
 model = None
 device = None
 class_names = None
+dataset_class_names = None
 transform = None
 dataset = None
 dataset_index = None
@@ -55,6 +72,9 @@ STATIC_DIR = BASE_DIR / "static"
 # Mount static files
 if STATIC_DIR.exists():
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+
+app.include_router(mapper_router)
+app.include_router(feedback_router)
 
 
 def build_dataset_index(split: str, classes: List[str]) -> List[Dict]:
@@ -112,6 +132,10 @@ def build_model(model_name: str, num_classes: int) -> nn.Module:
         model = models.mobilenet_v3_large(weights=None)
         num_ftrs = model.classifier[3].in_features
         model.classifier[3] = nn.Linear(num_ftrs, num_classes)
+    elif model_name == 'vit_b_16':
+        model = models.vit_b_16(weights=None)
+        num_ftrs = model.heads.head.in_features
+        model.heads.head = nn.Linear(num_ftrs, num_classes)
     else:
         raise ValueError(f"Unknown model: {model_name}")
     return model
@@ -143,7 +167,7 @@ def _predict_logits_with_tta(model: nn.Module, img_tensor: torch.Tensor,
 
 def load_model_and_config():
     """Load the best trained model and configuration"""
-    global model, device, class_names, transform, dataset, dataset_index, inference_tta_views
+    global model, device, class_names, dataset_class_names, transform, dataset, dataset_index, inference_tta_views
     # Load report to get model info
     report_path = RUNS_DIR / "report.json"
     if not report_path.exists():
@@ -173,8 +197,9 @@ def load_model_and_config():
     
     # Load dataset for class names and analysis (with transforms)
     dataset = Food101(root=str(DATA_DIR), split='test', download=False, transform=transform)
-    class_names = dataset.classes
-    dataset_index = build_dataset_index(split="test", classes=class_names)
+    dataset_class_names = dataset.classes
+    class_names = report.get("class_names", dataset_class_names)
+    dataset_index = build_dataset_index(split="test", classes=dataset_class_names)
     if len(dataset_index) != len(dataset):
         raise RuntimeError(
             f"Dataset index size mismatch: metadata={len(dataset_index)} dataset={len(dataset)}"
@@ -187,26 +212,59 @@ def load_model_and_config():
     
     # Load trained weights
     model_path = RUNS_DIR / "best_model.pth"
-    model.load_state_dict(torch.load(model_path, map_location=device))
+    model.load_state_dict(torch.load(model_path, map_location=device, weights_only=True))
     model = model.to(device)
     model.eval()
     
-    print(f"✓ Model loaded: {best_model_name}")
-    print(f"✓ Classes: {len(class_names)}")
-    print(f"✓ Test dataset loaded: {len(dataset)} images")
+    print(f"[OK] Model loaded: {best_model_name}")
+    print(f"[OK] Classes: {len(class_names)}")
+    print(f"[OK] Test dataset loaded: {len(dataset)} images")
     return report
 
 
-@app.on_event("startup")
-async def startup_event():
-    """Load model on startup"""
-    try:
-        report = load_model_and_config()
-        print("✓ API ready!")
-    except Exception as e:
-        print(f"Error loading model: {e}")
-        print("Please run training first: python -m src.train_food101")
+def _get_dataset_sample(index: int) -> Dict:
+    """Return dataset metadata for a given test index."""
+    if dataset is None or dataset_index is None:
+        raise HTTPException(status_code=503, detail="Dataset not loaded")
+    if index < 0 or index >= len(dataset):
+        raise HTTPException(status_code=404, detail="Image index out of range")
 
+    sample = dataset_index[index]
+    image_path = Path(sample["image_path"])
+    if not image_path.exists():
+        raise HTTPException(status_code=404, detail="Image file not found")
+    return sample
+
+
+def _format_predictions(output: torch.Tensor) -> List[Dict]:
+    """Convert logits into top-3 class predictions."""
+    probs = torch.nn.functional.softmax(output, dim=1)
+    top3_prob, top3_idx = probs.topk(3, dim=1)
+
+    predictions = []
+    for i in range(3):
+        predictions.append({
+            "rank": i + 1,
+            "class": class_names[top3_idx[0][i].item()],
+            "confidence": float(top3_prob[0][i].item() * 100),
+        })
+    return predictions
+
+
+def _predict_pil_image(image: Image.Image) -> Dict:
+    """Run inference on a PIL image and return a JSON-friendly result."""
+    if model is None or transform is None or device is None:
+        raise HTTPException(status_code=503, detail="Model not loaded")
+
+    img_tensor = transform(image).unsqueeze(0).to(device)
+    with torch.no_grad():
+        output = _predict_logits_with_tta(model, img_tensor, tta_views=inference_tta_views)
+
+    return {
+        "success": True,
+        "predictions": _format_predictions(output),
+        "image_size": list(image.size),
+    }
 
 @app.get("/")
 async def root():
@@ -247,8 +305,14 @@ async def get_classes():
     """Get list of all food classes"""
     if class_names is None:
         raise HTTPException(status_code=503, detail="Model not loaded")
-    
-    return {"classes": class_names, "count": len(class_names)}
+
+    sample_classes = dataset_class_names or class_names
+    return {
+        "classes": sample_classes,
+        "count": len(sample_classes),
+        "all_classes": class_names,
+        "total_count": len(class_names),
+    }
 
 
 @app.post("/predict")
@@ -264,36 +328,35 @@ async def predict(file: UploadFile = File(...)):
         # Read and process image
         contents = await file.read()
         image = Image.open(io.BytesIO(contents)).convert('RGB')
-        
-        # Transform and predict
-        img_tensor = transform(image).unsqueeze(0).to(device)
-        
-          
-        with torch.no_grad():
-            output = _predict_logits_with_tta(model, img_tensor, tta_views=inference_tta_views)
-
-            
-            # Get probabilities
-            probs = torch.nn.functional.softmax(output, dim=1)
-            top3_prob, top3_idx = probs.topk(3, dim=1)
-        
-        # Format results
-        predictions = []
-        for i in range(3):
-            predictions.append({
-                "rank": i + 1,
-                "class": class_names[top3_idx[0][i].item()],
-                "confidence": float(top3_prob[0][i].item() * 100)
-            })
-        
-        return {
-            "success": True,
-            "predictions": predictions,
-            "image_size": image.size
-        }
-    
+        return _predict_pil_image(image)
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Error processing image: {str(e)}")
+
+
+@app.get("/predict/dataset/{index}")
+async def predict_dataset_sample(index: int):
+    """Predict a Food-101 test sample directly by dataset index."""
+    sample = _get_dataset_sample(index)
+    image_path = Path(sample["image_path"])
+
+    try:
+        with Image.open(image_path) as image_file:
+            image = image_file.convert("RGB")
+        result = _predict_pil_image(image)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Error processing dataset image: {str(e)}")
+
+    result["sample"] = {
+        "index": sample["index"],
+        "true_label": sample["label_name"],
+        "label_index": sample["label_index"],
+        "image_url": f"/dataset/image/{sample['index']}",
+    }
+    return result
 
 
 @app.get("/dataset/random")
@@ -303,14 +366,14 @@ async def get_random_dataset_image(split: str = "test", category: str = None):
     Optionally filter by category name
     Returns image path and true label
     """
-    if dataset is None or dataset_index is None:
+    if dataset is None or dataset_index is None or dataset_class_names is None:
         raise HTTPException(status_code=503, detail="Dataset not loaded")
-    
+
     # If category specified, filter by it
     if category:
         # Find the class index for this category
         try:
-            class_idx = class_names.index(category)
+            class_idx = dataset_class_names.index(category)
         except ValueError:
             raise HTTPException(status_code=404, detail=f"Category not found: {category}")
         
@@ -326,7 +389,7 @@ async def get_random_dataset_image(split: str = "test", category: str = None):
         # Get random sample from entire dataset
         idx = random.randint(0, len(dataset) - 1)
     
-    sample = dataset_index[idx]
+    sample = _get_dataset_sample(idx)
     
     return {
         "index": idx,
@@ -339,16 +402,7 @@ async def get_random_dataset_image(split: str = "test", category: str = None):
 @app.get("/dataset/image/{index}")
 async def get_dataset_image(index: int, split: str = "test"):
     """Get specific image from dataset by index"""
-    if dataset is None or dataset_index is None:
-        raise HTTPException(status_code=503, detail="Dataset not loaded")
-    
-    if index < 0 or index >= len(dataset):
-        raise HTTPException(status_code=404, detail="Image index out of range")
-    
-    full_path = Path(dataset_index[index]["image_path"])
-    if not full_path.exists():
-        raise HTTPException(status_code=404, detail="Image file not found")
-    
+    full_path = Path(_get_dataset_sample(index)["image_path"])
     return FileResponse(full_path, media_type="image/jpeg")
 
 
@@ -420,17 +474,19 @@ async def get_per_class_performance(force_recalculate: bool = False):
     
     # Try to load from cache first
     if cache_path.exists() and not force_recalculate:
-        print("✓ Loading per-class performance from cache...")
+        print("[OK] Loading per-class performance from cache...")
         with open(cache_path, 'r') as f:
             data = json.load(f)
         return data
     
     # If no cache or force recalculate, compute it
-    if model is None or dataset is None or dataset_index is None:
+    if model is None or dataset is None or dataset_index is None or dataset_class_names is None:
         raise HTTPException(status_code=503, detail="Model not loaded")
+
+    analysis_class_names = dataset_class_names
     
-    print("⚠️  Cache not found or recalculation requested.")
-    print("💡 Tip: Run 'python src/analyze_performance.py' to pre-calculate and save results")
+    print("[WARN] Cache not found or recalculation requested.")
+    print("[TIP] Run 'python src/analyze_performance.py' to pre-calculate and save results")
     print("Computing per-class performance (this may take a moment)...")
     
     from torch.utils.data import DataLoader
@@ -445,9 +501,9 @@ async def get_per_class_performance(force_recalculate: bool = False):
     )
     
     # Track per-class stats
-    class_correct = [0] * len(class_names)
-    class_total = [0] * len(class_names)
-    class_confidence = [[] for _ in range(len(class_names))]
+    class_correct = [0] * len(analysis_class_names)
+    class_total = [0] * len(analysis_class_names)
+    class_confidence = [[] for _ in range(len(analysis_class_names))]
     
     # Import tqdm for progress bar
     from tqdm import tqdm
@@ -511,7 +567,7 @@ async def get_per_class_performance(force_recalculate: bool = False):
         if label_idx not in first_index_for_label:
             first_index_for_label[label_idx] = item["index"]
 
-    for i, class_name in enumerate(class_names):
+    for i, class_name in enumerate(analysis_class_names):
         if class_total[i] > 0:
             accuracy = (class_correct[i] / class_total[i]) * 100
             avg_confidence = sum(class_confidence[i]) / len(class_confidence[i]) * 100
@@ -549,11 +605,11 @@ async def get_per_class_performance(force_recalculate: bool = False):
     try:
         with open(cache_path, 'w') as f:
             json.dump(output_data, f, indent=2)
-        print(f"✓ Results cached to: {cache_path}")
+        print(f"[OK] Results cached to: {cache_path}")
     except Exception as e:
-        print(f"⚠️  Could not save cache: {e}")
+        print(f"[WARN] Could not save cache: {e}")
     
-    print(f"✓ Per-class analysis complete for {len(results)} classes")
+    print(f"[OK] Per-class analysis complete for {len(results)} classes")
     
     return output_data
 
