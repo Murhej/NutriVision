@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NutriVision - Food Analysis</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="app-shell">
+        <div class="ambient ambient-one"></div>
+        <div class="ambient ambient-two"></div>
+
+        <main class="phone-frame">
+            <header class="screen-header">
+                <button id="backBtn" class="icon-button" type="button" aria-label="Go back">&#8249;</button>
+                <div class="header-copy">
+                    <p class="header-kicker">NutriVision</p>
+                    <h1 id="screenTitle">Food Analysis</h1>
+                </div>
+                <a href="help.html" class="header-link" target="_blank" rel="noreferrer">Help</a>
+            </header>
+
+            <section class="capture-panel">
+                <div class="action-row">
+                    <label class="action-chip primary-chip" for="fileInput">
+                        Upload Photo
+                    </label>
+                    <button id="randomBtn" class="action-chip" type="button">Random Test Image</button>
+                    <input type="file" id="fileInput" accept="image/*" hidden>
+                </div>
+
+                <div class="action-row compact-row">
+                    <select id="categorySelect" class="category-select">
+                        <option value="">Pick a dataset category</option>
+                    </select>
+                    <button id="categoryBtn" class="action-chip compact-chip" type="button" disabled>Use Category</button>
+                </div>
+
+                <div class="model-pill" id="modelInfo">Loading model info...</div>
+                <div id="datasetInfo" class="dataset-pill hidden"></div>
+
+                <div id="uploadArea" class="upload-stage" tabindex="0">
+                    <div id="emptyState" class="empty-state">
+                        <div class="empty-icon">+</div>
+                        <h2>Analyze a meal photo</h2>
+                        <p>Upload your own image or use a Food-101 sample from the API.</p>
+                    </div>
+
+                    <div id="imagePreview" class="image-preview hidden">
+                        <img id="previewImg" alt="Meal preview">
+                        <div id="heroMatchBadge" class="match-badge hidden"></div>
+                        <button id="clearBtn" class="clear-btn" type="button">Retake</button>
+                    </div>
+                </div>
+            </section>
+
+            <section id="loading" class="message-panel loading hidden">
+                <div class="spinner"></div>
+                <p id="loadingText">Analyzing image...</p>
+            </section>
+
+            <section id="resultsError" class="message-panel error hidden"></section>
+            <section id="saveMessage" class="message-panel success hidden"></section>
+
+            <section id="analysisStep" class="analysis-card hidden">
+                <div class="card-intro">
+                    <h2>What did you eat?</h2>
+                    <p>Select the best match. If the prediction is wrong, click the meal name to open the detailed 3-photo correction page.</p>
+                </div>
+
+                <div id="predictionOptions" class="prediction-options"></div>
+
+                <div class="compact-field-row">
+                    <div class="compact-field-copy">
+                        <label class="field-label compact-label" for="customFoodInput">Quick meal rename</label>
+                        <p class="field-help compact-help">Use this only if the prediction is close but the name needs a small fix. For a wrong meal, click the meal name above.</p>
+                    </div>
+                    <button id="correctionLink" class="inline-link-button" type="button">Open correction page</button>
+                </div>
+                <input
+                    id="customFoodInput"
+                    class="text-input compact-input"
+                    type="text"
+                    placeholder="Example: pepperoni pizza"
+                >
+                <div id="customLookupPanel" class="lookup-panel hidden"></div>
+
+                <label class="field-label" for="mealComment">Describe your meal</label>
+                <textarea
+                    id="mealComment"
+                    class="meal-textarea"
+                    rows="4"
+                    placeholder="Enter one meal only. Example: 1 plate chicken nasi goreng with egg and vegetables"
+                ></textarea>
+                <p class="field-help">Enter one meal description only. Include count, size, protein, sauce, and sides. Example: "1 cup chicken fried rice with egg". This text is sent to Edamam to improve the calorie estimate.</p>
+
+                <button id="continueBtn" class="cta-button" type="button" disabled>Continue to Portion Size</button>
+            </section>
+
+            <section id="portionStep" class="analysis-card hidden">
+                <div class="meal-summary">
+                    <img id="summaryImg" class="summary-image" alt="Selected meal">
+                    <div class="summary-copy">
+                        <h2 id="portionMealName">Meal</h2>
+                        <p id="portionMealComment">Nutrition estimate based on the selected food and your notes.</p>
+                    </div>
+                </div>
+
+                <div class="macro-grid">
+                    <div class="macro-card accent-green">
+                        <span id="kcalValue" class="macro-value">0</span>
+                        <span class="macro-label">kcal</span>
+                    </div>
+                    <div class="macro-card accent-mint">
+                        <span id="proteinValue" class="macro-value">0g</span>
+                        <span class="macro-label">Protein</span>
+                    </div>
+                    <div class="macro-card accent-gold">
+                        <span id="carbsValue" class="macro-value">0g</span>
+                        <span class="macro-label">Carbs</span>
+                    </div>
+                    <div class="macro-card accent-coral">
+                        <span id="fatValue" class="macro-value">0g</span>
+                        <span class="macro-label">Fat</span>
+                    </div>
+                </div>
+
+                <div class="section-title">
+                    <h3>Set portion amount</h3>
+                    <p>Use the slider and unit picker to match how much you actually ate.</p>
+                </div>
+
+                <div class="portion-control-card">
+                    <div class="portion-control-head">
+                        <strong>Amount</strong>
+                        <span id="portionAmountBadge" class="portion-amount-badge">1.00 serving</span>
+                    </div>
+                    <input id="portionSlider" class="portion-slider" type="range" min="0.5" max="2" step="0.25" value="1">
+                    <div class="slider-scale">
+                        <span>0.5</span>
+                        <span>1.0</span>
+                        <span>1.5</span>
+                        <span>2.0</span>
+                    </div>
+                    <div class="portion-unit-row">
+                        <label class="field-label compact-label" for="portionUnitSelect">Unit</label>
+                        <select id="portionUnitSelect" class="category-select"></select>
+                    </div>
+                    <p id="portionHelper" class="field-help">Select unit and intake amount.</p>
+                </div>
+
+                <div class="macro-legend">
+                    <span><i class="legend-dot legend-carb"></i>Carb</span>
+                    <span><i class="legend-dot legend-fat"></i>Fat</span>
+                    <span><i class="legend-dot legend-protein"></i>Protein</span>
+                </div>
+                <div class="macro-bar-track">
+                    <div id="macroBarCarbs" class="macro-bar-segment macro-bar-carbs"></div>
+                    <div id="macroBarFat" class="macro-bar-segment macro-bar-fat"></div>
+                    <div id="macroBarProtein" class="macro-bar-segment macro-bar-protein"></div>
+                </div>
+                <div id="nutritionFactsList" class="nutrition-facts-list"></div>
+
+                <div class="notice-box">
+                    <strong>Nutrition estimate</strong>
+                    <p>Values are AI-estimated and can vary based on real ingredients, sauces, and preparation method.</p>
+                </div>
+
+                <div class="footer-actions">
+                    <button id="portionBackBtn" class="secondary-button" type="button">Back</button>
+                    <button id="saveMealBtn" class="cta-button" type="button">Add to Log</button>
+                </div>
+            </section>
+
+            <section id="recentLogs" class="analysis-card hidden">
+                <div class="card-intro">
+                    <h2>Recent Log</h2>
+                    <p>Your latest saved meal entries from the API.</p>
+                </div>
+                <div id="recentLogList" class="recent-log-list"></div>
+            </section>
+        </main>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>
