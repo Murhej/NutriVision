@@ -1,3 +1,8 @@
+"""
+/map/* router — nutrition data, variants, portions, and meal logging.
+All URL paths are identical to the original api_mapper.py.
+"""
+
 from __future__ import annotations
 
 import json
@@ -8,22 +13,21 @@ from typing import Dict, Optional
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
-from src.food_mapper import (
+from src.api.food_mapper import (
     FOOD_VARIANTS,
     _normalize_label,
+    build_candidate_queries,
     build_external_api_queries,
     build_follow_up_questions,
-    build_candidate_queries,
     fetch_nutrition,
     get_last_nutrition_error,
     handle_unknown_food,
     scale_nutrition,
 )
 
-
 mapper_router = APIRouter(prefix="/map", tags=["Nutrition Mapping"])
 
-BASE_DIR = Path(__file__).resolve().parent.parent
+BASE_DIR = Path(__file__).resolve().parent.parent.parent
 OUTPUTS_DIR = BASE_DIR / "outputs"
 MEAL_LOG_PATH = OUTPUTS_DIR / "meal_logs.json"
 
@@ -36,15 +40,15 @@ PORTION_PRESETS = {
 
 
 class FoodMappingRequest(BaseModel):
-    food_label: str = Field(..., example="pizza")
-    user_description: Optional[str] = Field(default=None, example="2 slices pepperoni pizza with extra cheese")
+    food_label: str = Field(...)
+    user_description: Optional[str] = Field(default=None)
     variants: Optional[Dict] = Field(default_factory=dict)
-    portion_id: str = Field(default="medium", example="medium")
-    portion_multiplier: Optional[float] = Field(default=None, example=1.0)
+    portion_id: str = Field(default="medium")
+    portion_multiplier: Optional[float] = Field(default=None)
 
 
 class NutritionQueryRequest(BaseModel):
-    query: str = Field(..., example="2 slices pepperoni pizza")
+    query: str = Field(...)
 
 
 class MealLogRequest(BaseModel):
@@ -60,25 +64,24 @@ class MealLogRequest(BaseModel):
     image_url: Optional[str] = None
 
 
-def _resolve_portion(request_portion_id: str, request_multiplier: Optional[float]) -> Dict:
-    preset = PORTION_PRESETS.get(request_portion_id, PORTION_PRESETS["medium"]).copy()
-    if request_multiplier is not None:
-        preset["multiplier"] = max(0.25, min(float(request_multiplier), 4.0))
-    preset["id"] = request_portion_id if request_portion_id in PORTION_PRESETS else "medium"
+def _resolve_portion(portion_id: str, multiplier: Optional[float]) -> Dict:
+    preset = PORTION_PRESETS.get(portion_id, PORTION_PRESETS["medium"]).copy()
+    if multiplier is not None:
+        preset["multiplier"] = max(0.25, min(float(multiplier), 4.0))
+    preset["id"] = portion_id if portion_id in PORTION_PRESETS else "medium"
     return preset
 
 
 def _append_meal_log(entry: Dict) -> Dict:
     OUTPUTS_DIR.mkdir(parents=True, exist_ok=True)
     if MEAL_LOG_PATH.exists():
-        with open(MEAL_LOG_PATH, "r", encoding="utf-8") as file:
-            existing = json.load(file)
+        with open(MEAL_LOG_PATH, "r", encoding="utf-8") as f:
+            existing = json.load(f)
     else:
         existing = []
-
     existing.append(entry)
-    with open(MEAL_LOG_PATH, "w", encoding="utf-8") as file:
-        json.dump(existing, file, indent=2)
+    with open(MEAL_LOG_PATH, "w", encoding="utf-8") as f:
+        json.dump(existing, f, indent=2)
     return entry
 
 
@@ -86,11 +89,7 @@ def _append_meal_log(entry: Dict) -> Dict:
 def get_variants(food_label: str):
     key = _normalize_label(food_label)
     questions = FOOD_VARIANTS.get(key, [])
-    return {
-        "food_label": food_label,
-        "needs_variants": len(questions) > 0,
-        "questions": questions,
-    }
+    return {"food_label": food_label, "needs_variants": len(questions) > 0, "questions": questions}
 
 
 @mapper_router.get("/portions")
@@ -112,19 +111,17 @@ def map_food(request: FoodMappingRequest):
     for query in queries:
         nutrition = fetch_nutrition(query)
         if nutrition:
-            scaled_nutrition = scale_nutrition(nutrition, portion["multiplier"])
-            display_name = label.replace("_", " ")
             return {
                 "status": "found",
                 "food_label": label,
-                "display_name": display_name,
+                "display_name": label.replace("_", " "),
                 "query_used": query,
                 "queries_tried": queries,
                 "variants_selected": request.variants or {},
                 "questions": questions,
                 "portion": portion,
                 "base_nutrition": nutrition,
-                "nutrition": scaled_nutrition,
+                "nutrition": scale_nutrition(nutrition, portion["multiplier"]),
             }
 
     last_error = get_last_nutrition_error()
@@ -143,11 +140,7 @@ def map_food(request: FoodMappingRequest):
             "external_api_queries": build_external_api_queries(label, queries, request.user_description),
         }
 
-    response = handle_unknown_food(
-        request.user_description or label,
-        attempted_queries=queries,
-        user_description=request.user_description,
-    )
+    response = handle_unknown_food(request.user_description or label, attempted_queries=queries, user_description=request.user_description)
     response["queries_tried"] = queries
     response["portion"] = portion
     response["questions"] = questions
@@ -182,7 +175,7 @@ def get_nutrition_by_query(request: NutritionQueryRequest):
         "external_api_queries": build_external_api_queries(query, [query]),
         "tips": [
             "Try a more specific serving description",
-            "Use common food names rather than only dish names",
+            "Use common food names rather than dish names",
             "Search manually at https://www.edamam.com/",
         ],
     }
@@ -192,7 +185,6 @@ def get_nutrition_by_query(request: NutritionQueryRequest):
 def save_meal_log(request: MealLogRequest):
     if not request.food_label.strip():
         raise HTTPException(status_code=400, detail="Food label cannot be empty.")
-
     entry = {
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "food_label": request.food_label,
@@ -206,17 +198,14 @@ def save_meal_log(request: MealLogRequest):
         "source": request.source,
         "image_url": request.image_url,
     }
-    saved = _append_meal_log(entry)
-    return {"status": "saved", "entry": saved}
+    return {"status": "saved", "entry": _append_meal_log(entry)}
 
 
 @mapper_router.get("/logs")
 def get_meal_logs(limit: int = 20):
     if not MEAL_LOG_PATH.exists():
         return {"entries": [], "count": 0}
-
-    with open(MEAL_LOG_PATH, "r", encoding="utf-8") as file:
-        entries = json.load(file)
-
+    with open(MEAL_LOG_PATH, "r", encoding="utf-8") as f:
+        entries = json.load(f)
     sliced = list(reversed(entries[-max(1, min(limit, 100)):]))
     return {"entries": sliced, "count": len(entries)}

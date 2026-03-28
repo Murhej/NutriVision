@@ -16,7 +16,7 @@ except ImportError:  # pragma: no cover - handled at runtime if dependency is mi
 
 
 def _load_local_env() -> None:
-    base_dir = Path(__file__).resolve().parent.parent
+    base_dir = Path(__file__).resolve().parent.parent.parent
     for candidate in (base_dir / ".env.local", base_dir / ".env"):
         if not candidate.exists():
             continue

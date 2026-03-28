@@ -1,0 +1,220 @@
+"""
+NutriVision — single CLI entrypoint.
+
+Usage:
+    python main.py                              # interactive menu
+    python main.py train                        # train all configured models
+    python main.py train --models resnet50      # train one model
+    python main.py train --models resnet50,vit_b_16
+    python main.py train --models all           # explicit all
+    python main.py train --resume resnet50      # resume a model from its checkpoint
+    python main.py train --resume all           # resume every model that has a checkpoint
+    python main.py train --list                 # print available model names and exit
+    python main.py incremental                  # incremental fine-tuning
+    python main.py evaluate                     # per-class accuracy analysis on test set
+    python main.py serve                        # start API server on :8000
+    python main.py download                     # download & stage Kaggle datasets
+"""
+
+from __future__ import annotations
+
+import argparse
+import sys
+
+
+# ---------------------------------------------------------------------------
+# GPU banner
+# ---------------------------------------------------------------------------
+
+def _print_gpu_info() -> None:
+    try:
+        import torch
+        print("\n" + "=" * 60)
+        print("NutriVision")
+        print("=" * 60)
+        if torch.cuda.is_available():
+            name = torch.cuda.get_device_name(0)
+            vram = torch.cuda.get_device_properties(0).total_memory / 1e9
+            print(f"GPU: {name}  |  VRAM: {vram:.2f} GB")
+        else:
+            print("GPU: Not available -- running on CPU")
+        print(f"PyTorch: {torch.__version__}")
+        print("=" * 60 + "\n")
+    except ImportError:
+        print("PyTorch not found -- install requirements.txt first.")
+
+
+# ---------------------------------------------------------------------------
+# Command implementations
+# ---------------------------------------------------------------------------
+
+def _cmd_train(args: argparse.Namespace) -> None:
+    from src.training.baseline import ALL_MODELS, main as train_main
+
+    if getattr(args, "list", False):
+        print("Available models:")
+        for i, m in enumerate(ALL_MODELS, 1):
+            print(f"  {i}. {m}")
+        return
+
+    # Resolve --models
+    models_arg = getattr(args, "models", None)
+    if models_arg and models_arg.lower() != "all":
+        requested = [m.strip() for m in models_arg.split(",") if m.strip()]
+        unknown = [m for m in requested if m not in ALL_MODELS]
+        if unknown:
+            print(f"Unknown model(s): {', '.join(unknown)}")
+            print(f"Available: {', '.join(ALL_MODELS)}")
+            sys.exit(1)
+        models_to_train = requested
+    else:
+        models_to_train = None  # use config defaults / all
+
+    resume_model = getattr(args, "resume", None)
+    train_main(models_to_train=models_to_train, resume_model=resume_model)
+
+
+def _cmd_incremental(_args: argparse.Namespace) -> None:
+    from src.training.incremental import main
+    main()
+
+
+def _cmd_evaluate(_args: argparse.Namespace) -> None:
+    from src.evaluation.analyzer import analyze_per_class_performance
+    analyze_per_class_performance()
+
+
+def _cmd_serve(_args: argparse.Namespace) -> None:
+    import uvicorn
+    from src.api.app import app
+    print("Starting NutriVision API Server...")
+    print("  Docs:     http://localhost:8000/docs")
+    print("  Frontend: http://localhost:8000/static/index.html")
+    print("  Stop:     Ctrl+C\n")
+    uvicorn.run(app, host="0.0.0.0", port=8000, log_level="info")
+
+
+def _cmd_download(_args: argparse.Namespace) -> None:
+    from src.training.datasets import main
+    main()
+
+
+# ---------------------------------------------------------------------------
+# Argument parser
+# ---------------------------------------------------------------------------
+
+def _build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="main.py",
+        description="NutriVision CLI",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=__doc__,
+    )
+    sub = parser.add_subparsers(dest="command", metavar="command")
+
+    # --- train ---
+    train_p = sub.add_parser("train", help="Food-101 baseline training")
+    train_p.add_argument(
+        "--models", metavar="NAMES",
+        help=(
+            "Comma-separated model names to train, or 'all'. "
+            "Example: --models resnet50,vit_b_16"
+        ),
+    )
+    train_p.add_argument(
+        "--resume", metavar="MODEL",
+        help=(
+            "Resume training from the last saved checkpoint. "
+            "Pass a model name (e.g. resnet50) or 'all' to resume every model "
+            "that has a checkpoint in runs/checkpoints/."
+        ),
+    )
+    train_p.add_argument(
+        "--list", action="store_true",
+        help="Print available model names and exit.",
+    )
+
+    # --- other commands (no extra flags for now) ---
+    sub.add_parser("incremental", help="Incremental fine-tuning on custom datasets")
+    sub.add_parser("evaluate",    help="Per-class accuracy analysis on the test set")
+    sub.add_parser("serve",       help="Start the FastAPI server on port 8000")
+    sub.add_parser("download",    help="Download & stage Kaggle datasets into data/")
+
+    return parser
+
+
+# ---------------------------------------------------------------------------
+# Dispatch
+# ---------------------------------------------------------------------------
+
+COMMAND_FNS = {
+    "train":       _cmd_train,
+    "incremental": _cmd_incremental,
+    "evaluate":    _cmd_evaluate,
+    "serve":       _cmd_serve,
+    "download":    _cmd_download,
+}
+
+
+def _interactive_menu() -> None:
+    items = list(COMMAND_FNS.keys())
+    descriptions = {
+        "train":       "Food-101 baseline training (supports --models, --resume, --list)",
+        "incremental": "Incremental fine-tuning on custom datasets",
+        "evaluate":    "Per-class accuracy analysis on test set",
+        "serve":       "Start the FastAPI server on port 8000",
+        "download":    "Download & stage Kaggle datasets into data/",
+    }
+    print("Available commands:")
+    for i, cmd in enumerate(items, 1):
+        print(f"  [{i}] {cmd:<15} {descriptions[cmd]}")
+    print("  [q] quit\n")
+
+    choice = input("Select a command (number or name): ").strip().lower()
+    if choice in ("q", "quit", "exit"):
+        print("Bye!")
+        return
+
+    if choice.isdigit():
+        idx = int(choice) - 1
+        if 0 <= idx < len(items):
+            choice = items[idx]
+        else:
+            print(f"Invalid selection.")
+            return
+
+    if choice in COMMAND_FNS:
+        # For interactive menu, pass empty namespace (no extra flags)
+        COMMAND_FNS[choice](argparse.Namespace())
+    else:
+        print(f"Unknown command: '{choice}'. Run `python main.py --help` for usage.")
+
+
+def main() -> None:
+    _print_gpu_info()
+
+    parser = _build_parser()
+
+    # No subcommand → interactive menu
+    if len(sys.argv) < 2:
+        _interactive_menu()
+        return
+
+    # Legacy: support plain `python main.py train` without subparser friction
+    args = parser.parse_args()
+
+    if args.command is None:
+        _interactive_menu()
+        return
+
+    if args.command not in COMMAND_FNS:
+        parser.print_help()
+        sys.exit(1)
+
+    COMMAND_FNS[args.command](args)
+
+
+if __name__ == "__main__":
+    import multiprocessing
+    multiprocessing.freeze_support()
+    main()
