@@ -137,6 +137,15 @@ def test_predict_non_image_returns_400(api_client):
     assert resp.status_code == 400
 
 
+def test_predict_empty_file_returns_400(api_client):
+    """A 0-byte upload should be rejected with HTTP 400."""
+    resp = api_client.post(
+        "/predict",
+        files={"file": ("empty.jpg", io.BytesIO(b""), "image/jpeg")},
+    )
+    assert resp.status_code == 400
+
+
 # ---------------------------------------------------------------------------
 # GET /dataset/random
 # ---------------------------------------------------------------------------

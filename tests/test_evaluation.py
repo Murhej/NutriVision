@@ -72,6 +72,30 @@ def test_topk_accuracy_single_class():
     assert abs(acc - 100.0) < 1e-3
 
 
+def test_topk_accuracy_k_exceeds_num_classes_raises():
+    """torch.topk with k > num_classes raises a RuntimeError — document the behaviour."""
+    logits = torch.zeros(4, 2)   # only 2 classes
+    targets = torch.zeros(4, dtype=torch.long)
+    with pytest.raises(RuntimeError):
+        topk_accuracy(logits, targets, k=3)
+
+
+def test_topk_accuracy_batch_of_one():
+    logits = torch.zeros(1, 5)
+    logits[0, 3] = 10.0
+    targets = torch.tensor([3])
+    assert abs(topk_accuracy(logits, targets, k=1) - 100.0) < 1e-3
+
+
+@pytest.mark.parametrize("k", [1, 3])
+def test_topk_accuracy_returns_float(k):
+    logits = torch.randn(8, 10)
+    targets = torch.randint(0, 10, (8,))
+    result = topk_accuracy(logits, targets, k=k)
+    assert isinstance(result, float)
+    assert 0.0 <= result <= 100.0
+
+
 # ---------------------------------------------------------------------------
 # set_seed
 # ---------------------------------------------------------------------------
@@ -170,3 +194,51 @@ def test_analyze_per_class_writes_output_file(
     assert "classes" in data
     assert isinstance(data["classes"], list)
     assert data["model_name"] == "resnet50"
+
+
+def test_analyze_raises_when_report_missing(tmp_path: Path):
+    """If report.json is absent, load_report should raise FileNotFoundError."""
+    runs_dir = tmp_path / "runs"
+    runs_dir.mkdir()
+    outputs_dir = tmp_path / "outputs"
+    outputs_dir.mkdir()
+    # No report.json created → should fail cleanly
+
+    with pytest.raises(FileNotFoundError, match="report"):
+        analyze_per_class_performance(
+            device_name="cpu",
+            runs_dir=runs_dir,
+            outputs_dir=outputs_dir,
+        )
+
+
+def test_analyze_raises_when_best_model_pth_missing(
+    tmp_runs_dir: Path,
+    tmp_outputs_dir: Path,
+):
+    """If best_model.pth is absent, loading the checkpoint should fail."""
+    pth = tmp_runs_dir / "best_model.pth"
+    if pth.exists():
+        pth.unlink()
+
+    # Mock Food101 and DataLoader so the failure is specifically about the missing .pth
+    mock_ds = MagicMock()
+    mock_ds.__len__ = MagicMock(return_value=NUM_TEST_CLASSES)
+    mock_ds.classes = TEST_CLASS_NAMES
+
+    fake_index = [
+        {"index": i, "label_index": i, "label_name": TEST_CLASS_NAMES[i], "image_path": f"/x/{i}.jpg"}
+        for i in range(NUM_TEST_CLASSES)
+    ]
+
+    with (
+        patch("src.evaluation.analyzer.Food101", return_value=mock_ds),
+        patch("src.evaluation.analyzer.DataLoader", return_value=[]),
+        patch("src.evaluation.analyzer.build_dataset_index", return_value=fake_index),
+    ):
+        with pytest.raises((FileNotFoundError, RuntimeError, OSError)):
+            analyze_per_class_performance(
+                device_name="cpu",
+                runs_dir=tmp_runs_dir,
+                outputs_dir=tmp_outputs_dir,
+            )

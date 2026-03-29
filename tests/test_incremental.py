@@ -49,6 +49,38 @@ def test_normalize_label_empty_string():
     assert normalize_label("") == ""
 
 
+@pytest.mark.parametrize("special", ["!@#$%", "foo!bar", "hello@world", "abc###def"])
+def test_normalize_label_special_characters(special: str):
+    """All non-alphanumeric characters should be replaced with underscores."""
+    result = normalize_label(special)
+    import re
+    assert re.match(r'^[a-z0-9_]*$', result), f"Unexpected chars in result: {result!r}"
+
+
+def test_normalize_label_unicode_input():
+    """Unicode letters are lowercased and non-ASCII collapsed to underscore."""
+    result = normalize_label("Crème Brûlée")
+    assert isinstance(result, str)
+    assert len(result) > 0
+    # Must contain only lowercase ascii alphanumeric + underscores
+    import re
+    assert re.match(r'^[a-z0-9_]*$', result), f"Unexpected chars: {result!r}"
+
+
+def test_normalize_label_very_long_string():
+    """Normalization of a 10k-character string should not raise."""
+    long_input = "a" * 5000 + " " * 100 + "B" * 5000
+    result = normalize_label(long_input)
+    assert isinstance(result, str)
+    assert len(result) > 0
+
+
+def test_normalize_label_only_special_chars():
+    """A string of only special chars should normalize to empty string."""
+    result = normalize_label("!!!###@@@")
+    assert result == ""
+
+
 # ---------------------------------------------------------------------------
 # canonicalize_source_label
 # signature: canonicalize_source_label(source_name: str, raw_label: str) -> str
@@ -113,6 +145,34 @@ def test_split_indices_all_classes_appear_in_train():
     assert train_classes == {0, 1, 2, 3, 4}
 
 
+def test_split_indices_one_sample_per_class():
+    """With 1 sample per class, no validation/test holdout is possible without losing all train data."""
+    labels = list(range(10))  # 10 classes, 1 sample each
+    train_idx, val_idx, test_idx = split_indices_by_class(labels, val_ratio=0.2, test_ratio=0.1)
+    # Every sample must appear in exactly one split
+    all_idx = set(train_idx) | set(val_idx) | set(test_idx)
+    assert len(all_idx) == 10
+    # No overlaps
+    assert len(set(train_idx) & set(val_idx)) == 0
+    assert len(set(train_idx) & set(test_idx)) == 0
+
+
+def test_split_indices_zero_val_ratio_no_val():
+    """val_ratio=0 should produce an empty validation set."""
+    labels = [i % 3 for i in range(30)]
+    _, val_idx, _ = split_indices_by_class(labels, val_ratio=0.0, test_ratio=0.1)
+    assert len(val_idx) == 0
+
+
+def test_split_indices_zero_both_ratios_all_in_train():
+    """val_ratio=0, test_ratio=0 → all samples go to train."""
+    labels = list(range(20))
+    train_idx, val_idx, test_idx = split_indices_by_class(labels, val_ratio=0.0, test_ratio=0.0)
+    assert len(val_idx) == 0
+    assert len(test_idx) == 0
+    assert len(train_idx) == 20
+
+
 # ---------------------------------------------------------------------------
 # LabelRemapDataset
 # signature: LabelRemapDataset(dataset, index_to_name, class_to_index)
@@ -152,6 +212,18 @@ def test_label_remap_dataset_relabels_correctly():
         assert new_label == class_to_index[index_to_name[original_label]]
 
 
+def test_label_remap_dataset_missing_label_raises():
+    """If index_to_name maps to a name not in class_to_index, KeyError is raised."""
+    ds = _DummyDataset()
+    # class_to_index only has food_0..food_2; food_3 and food_4 are missing
+    index_to_name = ["food_0", "food_1", "food_2", "food_3", "food_4"]
+    class_to_index = {f"food_{i}": i for i in range(3)}
+    wrapped = LabelRemapDataset(ds, index_to_name, class_to_index)
+    # ds.targets = [0,1,2,3,4,0,1,2,3,4]; accessing index 3 will map to "food_3" → KeyError
+    with pytest.raises(KeyError):
+        _ = wrapped[3]
+
+
 # ---------------------------------------------------------------------------
 # SamplesDataset
 # signature: SamplesDataset(samples, class_names, transform=None)
@@ -185,6 +257,23 @@ def test_samples_dataset_returns_tensor_and_correct_label(tmp_path: Path, test_i
     assert isinstance(img, torch.Tensor)
     assert img.shape == (3, 224, 224)
     assert label == 42
+
+
+def test_samples_dataset_missing_file_raises(tmp_path: Path):
+    """Accessing a sample whose file path does not exist should raise an OSError/FileNotFoundError."""
+    missing = str(tmp_path / "does_not_exist.jpg")
+    ds = SamplesDataset([(missing, 0)], class_names=["food_0"])
+    with pytest.raises((FileNotFoundError, OSError)):
+        _ = ds[0]
+
+
+def test_samples_dataset_corrupted_file_raises(tmp_path: Path):
+    """A corrupt (non-image) file should raise when PIL tries to open it."""
+    bad = tmp_path / "corrupt.jpg"
+    bad.write_bytes(b"this is not image data at all !!!")
+    ds = SamplesDataset([(str(bad), 0)], class_names=["food_0"])
+    with pytest.raises(Exception):
+        _ = ds[0]
 
 
 # ---------------------------------------------------------------------------
@@ -226,3 +315,29 @@ def test_promotion_skipped_when_protection_disabled():
     config.protect_best_checkpoint = False
     accepted, _ = evaluate_promotion_decision(base_report, result, config)
     assert accepted is True
+
+
+def test_promotion_when_base_report_has_no_metrics():
+    """If best_model_metrics is absent entirely, no drop can be computed → accepted."""
+    base_report = {}   # no "best_model_metrics" key
+    result = {"final_top1": 65.0, "final_top3": 82.0}
+    config = IncrementalConfig()
+    config.protect_best_checkpoint = True
+    config.max_allowed_test_top1_drop = 2.0
+    config.max_allowed_test_top3_drop = 2.0
+    accepted, reasons = evaluate_promotion_decision(base_report, result, config)
+    # No base metrics → nothing to compare against → should be accepted
+    assert accepted is True
+
+
+def test_promotion_reasons_list_nonempty_on_rejection():
+    base_report = {"best_model_metrics": {"test_top1_accuracy": 85.0, "test_top3_accuracy": 95.0}}
+    result = {"final_top1": 50.0, "final_top3": 60.0}   # huge drop
+    config = IncrementalConfig()
+    config.protect_best_checkpoint = True
+    config.max_allowed_test_top1_drop = 2.0
+    config.max_allowed_test_top3_drop = 2.0
+    accepted, reasons = evaluate_promotion_decision(base_report, result, config)
+    assert accepted is False
+    assert isinstance(reasons, list)
+    assert len(reasons) > 0

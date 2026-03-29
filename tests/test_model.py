@@ -87,6 +87,15 @@ def test_load_checkpoint_wrong_architecture_raises(tmp_path: Path):
         load_checkpoint(effnet, ckpt, DEVICE)
 
 
+def test_load_checkpoint_corrupted_file_raises(tmp_path: Path):
+    """A corrupted .pth file should raise an exception on load."""
+    ckpt = tmp_path / "corrupt.pth"
+    ckpt.write_bytes(b"not a valid pytorch serialization format at all !!!")
+    model = build_model("resnet50", NUM_CLASSES)
+    with pytest.raises(Exception):
+        load_checkpoint(model, ckpt, DEVICE)
+
+
 # ---------------------------------------------------------------------------
 # forward_with_tta
 # ---------------------------------------------------------------------------
@@ -124,6 +133,26 @@ def test_forward_with_tta_four_views_shape(mock_model: nn.Module):
     assert out.shape == (1, num_classes)
 
 
+def test_forward_with_tta_batch_size_greater_than_one(mock_model: nn.Module):
+    """tta_views=2 should work for batches larger than 1."""
+    model = mock_model.eval()
+    x = torch.randn(4, 3, 224, 224)   # batch of 4
+    num_classes = model.fc.out_features
+    with torch.no_grad():
+        out = forward_with_tta(model, x, DEVICE, tta_views=2)
+    assert out.shape == (4, num_classes)
+
+
+def test_forward_with_tta_use_amp_true_on_cpu_does_not_crash(mock_model: nn.Module):
+    """use_amp=True with CPU device falls through to the non-AMP path (no autocast)."""
+    model = mock_model.eval()
+    x = torch.randn(1, 3, 224, 224)
+    with torch.no_grad():
+        # device.type == "cpu" so the AMP branch is skipped — must not raise
+        out = forward_with_tta(model, x, DEVICE, tta_views=1, use_amp=True)
+    assert out.shape[0] == 1
+
+
 # ---------------------------------------------------------------------------
 # format_top3_predictions
 # ---------------------------------------------------------------------------
@@ -157,6 +186,25 @@ def test_format_predictions_confidences_sum_near_100():
     assert total > 95.0  # top-3 dominate
 
 
+def test_format_predictions_fewer_than_3_classes_raises():
+    """format_top3_predictions internally calls topk(3), which raises if < 3 classes."""
+    logits = torch.zeros(1, 2)   # only 2 classes
+    classes = ["c0", "c1"]
+    with pytest.raises(RuntimeError):
+        format_top3_predictions(logits, classes)
+
+
+def test_format_predictions_exactly_3_classes():
+    """With exactly 3 classes, top-3 covers all possibilities."""
+    logits = torch.tensor([[3.0, 1.0, 2.0]])
+    classes = ["best", "worst", "middle"]
+    preds = format_top3_predictions(logits, classes)
+    assert len(preds) == 3
+    assert preds[0]["class"] == "best"
+    assert preds[1]["class"] == "middle"
+    assert preds[2]["class"] == "worst"
+
+
 # ---------------------------------------------------------------------------
 # build_model unknown name
 # ---------------------------------------------------------------------------
@@ -164,3 +212,22 @@ def test_format_predictions_confidences_sum_near_100():
 def test_build_model_unknown_name_raises():
     with pytest.raises(ValueError, match="Unknown model"):
         build_model("not_a_real_model", NUM_CLASSES)
+
+
+# ---------------------------------------------------------------------------
+# load_report
+# ---------------------------------------------------------------------------
+
+from src.core.model import load_report
+
+
+def test_load_report_raises_when_file_missing(tmp_path: Path):
+    """load_report should raise FileNotFoundError when report.json is absent."""
+    with pytest.raises(FileNotFoundError, match="report"):
+        load_report(tmp_path)
+
+
+def test_load_report_returns_dict(tmp_runs_dir: Path):
+    """load_report should return a dict when report.json exists."""
+    report = load_report(tmp_runs_dir)
+    assert isinstance(report, dict)
