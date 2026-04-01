@@ -1,3 +1,8 @@
+"""
+/feedback/* router — user image submissions for training review.
+All URL paths are identical to the original feedback_api.py.
+"""
+
 from __future__ import annotations
 
 import json
@@ -9,37 +14,20 @@ from uuid import uuid4
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 
-from src.food_mapper import fetch_nutrition
-
+from src.api.food_mapper import fetch_nutrition
 
 feedback_router = APIRouter(prefix="/feedback", tags=["User Feedback"])
 
-BASE_DIR = Path(__file__).resolve().parent.parent
+BASE_DIR = Path(__file__).resolve().parent.parent.parent
 OUTPUTS_DIR = BASE_DIR / "outputs"
 FEEDBACK_DIR = OUTPUTS_DIR / "training_submissions"
 MANIFEST_PATH = FEEDBACK_DIR / "manifest.jsonl"
 
 SHOT_GUIDE = [
-    {
-        "key": "top_image",
-        "title": "Top View",
-        "description": "Take one photo from above so the full plate is visible.",
-    },
-    {
-        "key": "side_image",
-        "title": "Side View",
-        "description": "Take one photo from the side to help estimate thickness and portion size.",
-    },
-    {
-        "key": "inside_image",
-        "title": "Inside View",
-        "description": "Take one photo showing the inside or cross-section of the meal.",
-    },
-    {
-        "key": "nutrition_label_image",
-        "title": "Nutrition Facts",
-        "description": "Optional: add a package label or menu nutrition photo when available.",
-    },
+    {"key": "top_image", "title": "Top View", "description": "Take one photo from above so the full plate is visible."},
+    {"key": "side_image", "title": "Side View", "description": "Take one photo from the side to help estimate thickness and portion size."},
+    {"key": "inside_image", "title": "Inside View", "description": "Take one photo showing the inside or cross-section of the meal."},
+    {"key": "nutrition_label_image", "title": "Nutrition Facts", "description": "Optional: add a package label or menu nutrition photo when available."},
 ]
 
 
@@ -59,16 +47,6 @@ def _compose_calorie_queries(
     added_amount: Optional[str],
     notes: Optional[str],
 ) -> List[str]:
-    meal_name = str(meal_name or "").strip()
-    food_type = str(food_type or "").strip()
-    brand_name = str(brand_name or "").strip()
-    portion_size = str(portion_size or "").strip()
-    protein_type = str(protein_type or "").strip()
-    protein_amount = str(protein_amount or "").strip()
-    added_items = str(added_items or "").strip()
-    added_amount = str(added_amount or "").strip()
-    notes = str(notes or "").strip()
-
     parts: List[str] = []
     if brand_name:
         parts.append(brand_name)
@@ -82,40 +60,29 @@ def _compose_calorie_queries(
         parts.append(protein_type)
     parts.append(meal_name)
     if added_items:
-        if added_amount:
-            parts.append(f"with {added_amount} {added_items}")
-        else:
-            parts.append(f"with {added_items}")
+        parts.append(f"with {added_amount} {added_items}" if added_amount else f"with {added_items}")
 
-    raw_queries = [
-        " ".join(part for part in parts if part).strip(),
-    ]
-
+    raw: List[str] = [" ".join(p for p in parts if p).strip()]
     if notes:
-        raw_queries.append(f"{raw_queries[0]} {notes}".strip())
-        raw_queries.append(notes)
-
-    raw_queries.extend(
-        [
-            f"{portion_size} {brand_name} {meal_name}".strip(),
-            f"{portion_size} {meal_name}".strip(),
-            f"{brand_name} {meal_name}".strip(),
-            f"1 serving {meal_name}".strip(),
-            meal_name,
-        ]
-    )
+        raw.extend([f"{raw[0]} {notes}".strip(), notes])
+    raw.extend([
+        f"{portion_size} {brand_name} {meal_name}".strip(),
+        f"{portion_size} {meal_name}".strip(),
+        f"{brand_name} {meal_name}".strip(),
+        f"1 serving {meal_name}".strip(),
+        meal_name,
+    ])
 
     deduped: List[str] = []
-    seen = set()
-    for query in raw_queries:
-        normalized = re.sub(r"\s+", " ", query).strip(" ,.")
+    seen: set[str] = set()
+    for q in raw:
+        normalized = re.sub(r"\s+", " ", q).strip(" ,.")
         if not normalized:
             continue
         key = normalized.lower()
-        if key in seen:
-            continue
-        seen.add(key)
-        deduped.append(normalized)
+        if key not in seen:
+            seen.add(key)
+            deduped.append(normalized)
     return deduped
 
 
@@ -131,57 +98,33 @@ def _estimate_feedback_nutrition(
     notes: Optional[str],
 ) -> Dict:
     queries = _compose_calorie_queries(
-        meal_name,
-        food_type,
-        brand_name,
-        portion_size,
-        protein_type,
-        protein_amount,
-        added_items,
-        added_amount,
-        notes,
+        meal_name, food_type, brand_name, portion_size,
+        protein_type, protein_amount, added_items, added_amount, notes,
     )
-
     for query in queries:
         nutrition = fetch_nutrition(query)
         if nutrition:
-            return {
-                "status": "found",
-                "query_used": query,
-                "queries_tried": queries,
-                "nutrition": nutrition,
-            }
-
-    return {
-        "status": "not_found",
-        "query_used": None,
-        "queries_tried": queries,
-        "nutrition": None,
-        "message": "No nutrition estimate was found for the submitted detail text.",
-    }
+            return {"status": "found", "query_used": query, "queries_tried": queries, "nutrition": nutrition}
+    return {"status": "not_found", "query_used": None, "queries_tried": queries, "nutrition": None, "message": "No nutrition estimate found."}
 
 
 def _parse_nutrition_facts_text(nutrition_facts: Optional[str]) -> Optional[Dict]:
     text = str(nutrition_facts or "").strip()
     if not text:
         return None
-
     patterns = {
         "calories": r"calories?\s*[:\-]?\s*(\d+(?:\.\d+)?)",
         "protein_g": r"protein\s*[:\-]?\s*(\d+(?:\.\d+)?)\s*g?",
         "carbs_g": r"(?:carbs?|carbohydrates?)\s*[:\-]?\s*(\d+(?:\.\d+)?)\s*g?",
         "fat_g": r"fat\s*[:\-]?\s*(\d+(?:\.\d+)?)\s*g?",
     }
-
     extracted = {}
     for key, pattern in patterns.items():
-        match = re.search(pattern, text, flags=re.IGNORECASE)
-        if match:
-            extracted[key] = round(float(match.group(1)), 1)
-
+        m = re.search(pattern, text, flags=re.IGNORECASE)
+        if m:
+            extracted[key] = round(float(m.group(1)), 1)
     if "calories" not in extracted:
         return None
-
     extracted.setdefault("protein_g", 0.0)
     extracted.setdefault("carbs_g", 0.0)
     extracted.setdefault("fat_g", 0.0)
@@ -192,18 +135,15 @@ def _parse_nutrition_facts_text(nutrition_facts: Optional[str]) -> Optional[Dict
 async def _save_upload(file: UploadFile, destination: Path) -> str:
     if not file or not file.filename:
         raise HTTPException(status_code=400, detail=f"Missing required image: {destination.stem}.")
-
     if file.content_type and not file.content_type.startswith("image/"):
         raise HTTPException(status_code=400, detail=f"{file.filename} is not an image.")
-
     content = await file.read()
     if not content:
         raise HTTPException(status_code=400, detail=f"{file.filename} is empty.")
-
-    suffix = Path(file.filename).suffix or destination.suffix or ".bin"
-    actual_destination = destination.with_suffix(suffix.lower())
-    actual_destination.write_bytes(content)
-    return actual_destination.name
+    suffix = Path(file.filename).suffix or ".bin"
+    actual = destination.with_suffix(suffix.lower())
+    actual.write_bytes(content)
+    return actual.name
 
 
 async def _save_optional_upload(file: Optional[UploadFile], destination: Path) -> Optional[str]:
@@ -214,16 +154,13 @@ async def _save_optional_upload(file: Optional[UploadFile], destination: Path) -
 
 def _append_manifest(entry: Dict) -> None:
     FEEDBACK_DIR.mkdir(parents=True, exist_ok=True)
-    with open(MANIFEST_PATH, "a", encoding="utf-8") as file:
-        file.write(json.dumps(entry) + "\n")
+    with open(MANIFEST_PATH, "a", encoding="utf-8") as f:
+        f.write(json.dumps(entry) + "\n")
 
 
 @feedback_router.get("/guide")
 def get_feedback_guide():
-    return {
-        "shots": SHOT_GUIDE,
-        "message": "Ask for three clear meal images, plus a nutrition label image when available, so the sample can be reviewed for future training.",
-    }
+    return {"shots": SHOT_GUIDE, "message": "Ask for three clear meal images, plus a nutrition label when available, so the sample can be reviewed for future training."}
 
 
 @feedback_router.post("/submit")
@@ -260,29 +197,19 @@ async def submit_feedback(
     top_name = await _save_upload(top_image, submission_dir / "top_view.jpg")
     side_name = await _save_upload(side_image, submission_dir / "side_view.jpg")
     inside_name = await _save_upload(inside_image, submission_dir / "inside_view.jpg")
-    nutrition_label_name = await _save_optional_upload(
-        nutrition_label_image,
-        submission_dir / "nutrition_label.jpg",
-    )
+    nutrition_label_name = await _save_optional_upload(nutrition_label_image, submission_dir / "nutrition_label.jpg")
 
     nutrition_result = _estimate_feedback_nutrition(
-        meal_name=meal_name,
-        food_type=food_type,
-        brand_name=brand_name,
-        portion_size=portion_size,
-        protein_type=protein_type,
-        protein_amount=protein_amount,
-        added_items=added_items,
-        added_amount=added_amount,
-        notes=notes,
+        meal_name, food_type, brand_name, portion_size,
+        protein_type, protein_amount, added_items, added_amount, notes,
     )
-    parsed_nutrition_facts = _parse_nutrition_facts_text(nutrition_facts)
-    if nutrition_result["status"] != "found" and parsed_nutrition_facts:
+    parsed = _parse_nutrition_facts_text(nutrition_facts)
+    if nutrition_result["status"] != "found" and parsed:
         nutrition_result = {
             "status": "found",
             "query_used": "nutrition_facts_text",
             "queries_tried": nutrition_result.get("queries_tried", []),
-            "nutrition": parsed_nutrition_facts,
+            "nutrition": parsed,
         }
 
     entry = {
@@ -311,13 +238,12 @@ async def submit_feedback(
         "training_status": "queued_for_training_review",
     }
 
-    with open(submission_dir / "metadata.json", "w", encoding="utf-8") as file:
-        json.dump(entry, file, indent=2)
-
+    with open(submission_dir / "metadata.json", "w", encoding="utf-8") as f:
+        json.dump(entry, f, indent=2)
     _append_manifest(entry)
 
     return {
         "status": "saved",
-        "message": "Correction saved for training review, queued in the training submissions folder, and calories were recalculated from the submitted detail text.",
+        "message": "Correction saved for training review, queued in the training submissions folder, and calories were recalculated.",
         "entry": entry,
     }

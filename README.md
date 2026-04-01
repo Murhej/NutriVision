@@ -1,69 +1,290 @@
 # NutriVision
 
-NutriVision is a food image classification and meal logging project built with PyTorch and FastAPI. It predicts foods from images, lets the user confirm or correct the result, estimates nutrition through external nutrition APIs, and supports incremental fine-tuning on top of an existing Food-101 model.
+NutriVision is an AI-powered food image classification and nutrition tracking system. It combines a PyTorch deep learning model with a FastAPI backend and a React Native (Expo) mobile app to let users scan meals, view nutrition data, track daily macros, and manage personal dietary goals.
 
 ## What it does
 
-- Classifies meal photos with top-3 predictions.
-- Lets the user rename a meal or open a correction flow when the prediction is wrong.
-- Collects 3 meal photos plus optional nutrition-label evidence for training review.
-- Estimates nutrition through real providers instead of hardcoded calorie tables.
-- Supports incremental training with extra datasets without restarting from scratch.
-- Saves the best checkpoint and evaluation report for the active model.
+- Classifies meal photos using a trained Food-101 deep learning model with top-3 predictions
+- Estimates nutrition (calories, protein, carbs, fat) through real APIs (Edamam, USDA)
+- Tracks daily meals, calories, and macros on a personal dashboard
+- Supports user authentication — each person gets their own isolated profile and meal history
+- Allows users to customize daily calorie and macro goals from their profile
+- Supports incremental fine-tuning to add new food classes without retraining from scratch
 
-## Main features
+---
 
-### Model and training
+## 🚀 Full Setup Guide (For Teammates)
 
-- Food-101 baseline training in `src/train_food101.py`
-- Incremental fine-tuning in `src/incremental_train.py`
-- Per-class Top-1 and Top-3 evaluation in `src/analyze_performance.py`
-- Windows-aware CUDA safety paths for training and evaluation
-- Top-1 and Top-3 reporting throughout training and evaluation
+Follow these steps in order to get the entire app running on your machine.
 
-### Web app
+### Prerequisites
 
-- Upload a meal image or test with dataset images
-- See top-3 predictions and confidence
-- Use a quick meal rename when the prediction is close
-- Open a correction page when the prediction is wrong
-- Upload top, side, inside, and optional nutrition-facts images
-- Adjust portion size dynamically in the frontend
-- Save meal logs through the backend
+Make sure you have the following installed:
 
-### Nutrition lookup
+| Tool | Version | Download |
+|------|---------|----------|
+| **Python** | 3.9+ | https://www.python.org/downloads/ |
+| **Node.js** | 18+ | https://nodejs.org/ |
+| **Expo Go** (on your phone) | Latest | App Store / Play Store |
+| **Git** | Any | https://git-scm.com/ |
 
-- Tries Edamam first
-- Tries USDA FoodData Central second
-- Returns provider-aware errors when the issue is network, auth, or rate limiting
-- Gives follow-up questions and stronger search queries when no nutrition match is found
+### Step 1: Clone the Repository
 
-## Quick start
+```bash
+git clone https://github.com/Murhej/NutriVision.git
+cd NutriVision
+```
 
-### 1. Install dependencies
+### Step 2: Install Python Dependencies
 
 ```bash
 pip install -r requirements.txt
 ```
 
-### 2. Optional: check GPU
+### Step 3: Train the AI Model
+
+> ⚠️ This step is required before the backend can classify food images. Training takes a few minutes in fast mode.
+
+```bash
+python main.py train
+```
+
+This creates:
+- `runs/best_model.pth` — the trained model weights
+- `runs/report.json` — model class list and metrics
+
+### Step 4: Set Up Nutrition API Keys
+
+Create a file named `.env.local` in the project root (this file is git-ignored):
+
+```env
+EDAMAM_APP_ID=your_edamam_app_id
+EDAMAM_API_KEY=your_edamam_api_key
+USDA_API_KEY=your_data_gov_key
+```
+
+- Get Edamam keys at: https://developer.edamam.com/
+- Get a USDA key at: https://fdc.nal.usda.gov/api-guide/
+
+### Step 5: Start the Backend Server
+
+Open **Terminal 1** (PowerShell):
+
+```bash
+cd "path\to\NutriVision"
+python main.py serve
+```
+
+You should see:
+```
+[OK] API ready!
+INFO: Uvicorn running on http://0.0.0.0:8000
+```
+
+> ⚠️ **Keep this terminal open!** The mobile app needs the backend running to work.
+
+### Step 6: Install Mobile App Dependencies
+
+Open **Terminal 2** (PowerShell):
+
+```bash
+cd "path\to\NutriVision\mobile"
+npm install
+```
+
+### Step 7: Start the Expo Dev Server
+
+In the same Terminal 2:
+
+```bash
+npx expo start
+```
+
+### Step 8: Open on Your Phone
+
+1. Open the **Expo Go** app on your phone
+2. Scan the QR code shown in Terminal 2
+3. The app will load on your device
+
+> ⚠️ Your phone and your computer **must be on the same Wi-Fi network**.
+
+### Step 9: Create Your Account
+
+When the app loads, you'll see the Welcome screen:
+1. Tap **"Create Account"**
+2. Enter your name, email, and a password
+3. You're in! Your personal dashboard is ready
+
+Each teammate creates their own account. All meal logs and goals are isolated per user.
+
+---
+
+## 📱 Mobile App Features
+
+| Feature | Description |
+|---------|-------------|
+| **Dashboard** | Daily calorie ring, macro progress bars, today's meal list |
+| **Scan** | Take a photo or pick from gallery → AI classifies it → shows nutrition |
+| **Calendar** | View past days' calorie totals at a glance |
+| **Leaderboard** | See who's logging the most consistently |
+| **Profile** | Edit name, goal, calorie/macro targets, toggle units, dark mode |
+| **Auth** | Real login/register system with isolated user data |
+
+---
+
+## 🔧 Common Commands Reference
+
+### Backend
+
+```bash
+# Train the model
+python main.py train
+
+# Start the API server
+python main.py serve
+
+# Run evaluation
+python main.py evaluate
+```
+
+### Mobile App
+
+```bash
+# Install dependencies (first time only)
+cd mobile
+npm install
+
+# Start Expo dev server
+npx expo start
+
+# Clear cache and restart (if you see stale data)
+npx expo start -c
+```
+
+---
+
+## Project Structure
+
+```text
+NutriVision/
+├── main.py                    # CLI entry point (train, serve, evaluate)
+├── requirements.txt           # Python dependencies
+├── .env.local                 # API keys (git-ignored, create manually)
+│
+├── src/
+│   ├── api/
+│   │   ├── app.py             # FastAPI application factory
+│   │   ├── auth.py            # User authentication (register/login)
+│   │   ├── inference.py       # Image classification endpoint
+│   │   ├── nutrition.py       # Nutrition lookup & meal logging
+│   │   ├── mobile_sync.py     # Dashboard, calendar, profile, leaderboard APIs
+│   │   ├── food_mapper.py     # Edamam & USDA nutrition query engine
+│   │   └── feedback.py        # Correction flow API
+│   ├── training/              # Model training scripts and config
+│   ├── core/                  # Data loading, model registry
+│   ├── evaluation/            # Per-class accuracy analysis
+│   └── visualization/         # Training charts and plots
+│
+├── mobile/
+│   ├── App.js                 # React Native entry point
+│   ├── package.json           # Node.js dependencies
+│   └── src/
+│       ├── api/client.js      # API client with auth token management
+│       ├── context/AuthContext.js  # Authentication state provider
+│       ├── navigation/AppNavigator.js  # Route definitions
+│       ├── screens/
+│       │   ├── WelcomeScreen.js
+│       │   ├── LoginScreen.js
+│       │   ├── RegisterScreen.js
+│       │   ├── DashboardScreen.js
+│       │   ├── ScanScreen.js
+│       │   ├── CalendarScreen.js
+│       │   ├── ProfileScreen.js
+│       │   ├── EditProfileScreen.js
+│       │   └── LeaderboardScreen.js
+│       ├── components/        # Reusable UI components
+│       └── theme/             # Design tokens and dark mode
+│
+├── static/                    # Legacy web UI
+├── outputs/                   # Generated data (meal_logs.json, users.json)
+├── runs/                      # Model checkpoints and reports
+└── data/                      # Training datasets
+```
+
+---
+
+## Troubleshooting
+
+### "Connection Refused" on the mobile app
+
+- Make sure `python main.py serve` is running in a separate terminal
+- Make sure your phone and computer are on the **same Wi-Fi network**
+- Try restarting Expo with cache clear: `npx expo start -c`
+
+### Model not loading when starting the server
+
+```bash
+python main.py train
+```
+
+### Nutrition lookup returns nothing
+
+- Check that `.env.local` has valid API keys
+- Try searching for simpler food names (e.g., "pizza" instead of "pepperoni pizza with extra cheese")
+- Make sure outbound HTTPS is not blocked by firewall, VPN, antivirus, or proxy
+
+### Nutrition lookup fails for every food
+
+Check:
+
+- your backend is running from `python main.py serve`
+- your API keys are set in `.env.local`
+- outbound HTTPS is not blocked by firewall, VPN, antivirus, or proxy
+
+### Edamam rate limit reached
+
+- Use your own Edamam credentials
+- Wait for rate limits to reset
+- Keep USDA enabled as the second provider
+
+### USDA or Edamam auth errors
+
+Check:
+
+- `EDAMAM_APP_ID`
+- `EDAMAM_API_KEY`
+- `USDA_API_KEY`
+
+### Windows CUDA issues during evaluation
+
+Use CPU for full-image evaluation:
+
+```bash
+python src/analyze_performance.py --device cpu
+```
+
+### App shows stale/old data
+
+- Press `r` in the Expo terminal to reload the app
+- Or restart with `npx expo start -c`
+
+### AsyncStorage error
+
+Make sure you installed the Expo-compatible version:
+```bash
+cd mobile
+npx expo install @react-native-async-storage/async-storage
+```
+
+---
+
+## Optional: Check GPU
 
 ```bash
 python check_gpu.py
 ```
 
-### 3. Train the Food-101 baseline
-
-```bash
-python -m src.train_food101
-```
-
-This writes:
-
-- `runs/best_model.pth`
-- `runs/report.json`
-
-### 4. Optional: build per-class analysis
+## Optional: Per-Class Analysis
 
 On Windows, CPU is the safer option for full-set evaluation:
 
@@ -75,41 +296,13 @@ This writes:
 
 - `outputs/per_class_performance.json`
 
-### 5. Start the API
+---
 
-```bash
-python -m src.api
-```
-
-Open:
-
-- Web UI: `http://127.0.0.1:8000/static/index.html`
-- API docs: `http://127.0.0.1:8000/docs`
-- Health check: `http://127.0.0.1:8000/health`
-
-## Nutrition API setup
-
-The app uses real nutrition providers. Do not commit keys to git.
-
-Create a local file named `.env.local` in the project root:
-
-```env
-EDAMAM_APP_ID=your_edamam_app_id
-EDAMAM_API_KEY=your_edamam_api_key
-USDA_API_KEY=your_data_gov_key
-```
-
-Notes:
-
-- `.env.local` is ignored by git.
-- If Edamam fails, the app will try USDA FoodData Central.
-- If both fail, the UI will show a provider error instead of pretending the food was not found.
-
-## Recommended manual tests
+## Recommended Manual Tests
 
 ### Basic nutrition lookup
 
-1. Start the backend with `python -m src.api`
+1. Start the backend with `python main.py serve`
 2. Open `http://127.0.0.1:8000/static/index.html`
 3. Upload a food image
 4. Try one description only in the meal description box
@@ -134,7 +327,9 @@ When a meal is not matched:
 3. Fill in meal name, type, brand, portion, and nutrition details
 4. Submit to save training feedback into the backend submission folder
 
-## Incremental training
+---
+
+## Incremental Training
 
 Use incremental training when you want to add new food, fruit, or vegetable classes on top of the current best Food-101 checkpoint.
 
@@ -174,123 +369,26 @@ Examples already used in this repo:
 - fast food classification datasets
 - custom incremental datasets
 
-## Commands
+---
 
-### Training
-
-```bash
-python -m src.train_food101
-python -m src.incremental_train
-```
-
-### Evaluation
-
-```bash
-python src/analyze_performance.py --device cpu
-```
-
-### API
-
-```bash
-python -m src.api
-```
-
-### Syntax checks
-
-```bash
-python -m py_compile src/api.py src/api_mapper.py src/food_mapper.py src/feedback_api.py
-python -m py_compile src/train_food101.py src/incremental_train.py src/analyze_performance.py
-node --check static/app.js
-node --check static/correction.js
-```
-
-## Project structure
-
-```text
-NutriVision/
-|-- src/
-|   |-- api.py
-|   |-- api_mapper.py
-|   |-- food_mapper.py
-|   |-- feedback_api.py
-|   |-- train_food101.py
-|   |-- incremental_train.py
-|   |-- analyze_performance.py
-|   `-- download_kaggle_datasets.py
-|-- static/
-|   |-- index.html
-|   |-- app.js
-|   |-- correction.html
-|   |-- correction.js
-|   |-- help.html
-|   `-- styles.css
-|-- data/
-|-- outputs/
-|-- runs/
-|-- requirements.txt
-|-- .gitignore
-`-- README.md
-```
-
-## Important generated files
+## Important Generated Files
 
 - `runs/best_model.pth`: active best checkpoint
 - `runs/report.json`: active model report and class list
 - `runs/last_incremental_report.json`: saved when an incremental run is rejected
 - `outputs/per_class_performance.json`: per-class evaluation report
 - `outputs/training_submissions/`: correction samples and manifest
+- `outputs/users.json`: registered user accounts (git-ignored)
+- `outputs/meal_logs.json`: all logged meals (git-ignored)
 
-## Troubleshooting
+---
 
-### Nutrition lookup fails for every food
-
-Check:
-
-- your backend is running from `python -m src.api`
-- you are opening `http://127.0.0.1:8000/static/index.html`
-- your API keys are set in `.env.local`
-- outbound HTTPS is not blocked by firewall, VPN, antivirus, or proxy
-
-### Edamam rate limit reached
-
-- use your own Edamam credentials
-- wait for rate limits to reset
-- keep USDA enabled as the second provider
-
-### USDA or Edamam auth errors
-
-Check:
-
-- `EDAMAM_APP_ID`
-- `EDAMAM_API_KEY`
-- `USDA_API_KEY`
-
-### Windows CUDA issues during evaluation
-
-Use CPU for full-image evaluation:
-
-```bash
-python src/analyze_performance.py --device cpu
-```
-
-### Model not loading
-
-Make sure these exist:
-
-- `runs/best_model.pth`
-- `runs/report.json`
-
-If not, train first:
-
-```bash
-python -m src.train_food101
-```
-
-## Deployment notes
+## Deployment Notes
 
 Do commit:
 
 - `src/`
+- `mobile/`
 - `static/`
 - `requirements.txt`
 - `README.md`
@@ -306,11 +404,27 @@ Do not commit:
 - `*.pth`
 - `*.pt`
 - `*.log`
+- `node_modules/`
 
 For deployment secrets, configure environment variables in your hosting platform instead of storing them in git.
+
+---
+
+## Syntax Checks
+
+```bash
+python -m py_compile src/api/app.py src/api/nutrition.py src/api/food_mapper.py src/api/feedback.py src/api/auth.py
+node --check static/app.js
+node --check static/correction.js
+```
+
+---
 
 ## References
 
 - Food-101 dataset: https://data.vision.ee.ethz.ch/cvl/datasets_extra/food-101/
 - Edamam Nutrition Data API: https://developer.edamam.com/edamam-docs-nutrition-api
 - USDA FoodData Central: https://fdc.nal.usda.gov/api-guide/
+- Expo Documentation: https://docs.expo.dev/
+- React Navigation: https://reactnavigation.org/
+
