@@ -26,9 +26,13 @@ from src.api.app import app
 
 @pytest.fixture(scope="module")
 def nutrition_client():
-    """Lightweight client — no model state needed for nutrition routes."""
+    """Lightweight client — no model state needed for nutrition routes.
+    Overrides the auth dependency so /map/log and /map/logs don't require a token."""
+    from src.api.auth import get_current_user_id
+    app.dependency_overrides[get_current_user_id] = lambda: "test_user"
     with TestClient(app) as client:
         yield client
+    app.dependency_overrides.pop(get_current_user_id, None)
 
 
 # ---------------------------------------------------------------------------
