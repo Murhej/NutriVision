@@ -1,18 +1,27 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { useTheme } from '../theme/ThemeContext';
 import { Home, CalendarDays, Camera, Newspaper, User, Trophy } from 'lucide-react-native';
 
-// Screens
 import WelcomeScreen from '../screens/WelcomeScreen';
+import PersonalDetailsScreen from '../screens/PersonalDetailsScreen';
+import GoalScreen from '../screens/GoalScreen';
+import ChallengeScreen from '../screens/ChallengeScreen';
+import PreferencesScreen from '../screens/PreferencesScreen';
+import ReactionScreen from '../screens/ReactionScreen';
+import ActivityLevelScreen from '../screens/ActivityLevelScreen';
+import ExerciseScreen from '../screens/ExerciseScreen';
+import ExerciseTypeScreen from '../screens/ExerciseTypeScreen';
+import LoginScreen from '../screens/LoginScreen';
 import DashboardScreen from '../screens/DashboardScreen';
 import CalendarScreen from '../screens/CalendarScreen';
 import ScanScreen from '../screens/ScanScreen';
 import FeedScreen from '../screens/FeedScreen';
 import ProfileScreen from '../screens/ProfileScreen';
 import LeaderboardScreen from '../screens/LeaderboardScreen';
+import JourneyStartScreen from '../screens/JourneyStartScreen';
 
 const Stack = createNativeStackNavigator();
 const Tab = createBottomTabNavigator();
@@ -95,6 +104,7 @@ function MainTabs() {
 
 export default function AppNavigator() {
   const { colors } = useTheme();
+  const [isLoggedIn, setIsLoggedIn] = useState(false);
 
   return (
     <NavigationContainer>
@@ -105,7 +115,23 @@ export default function AppNavigator() {
         }}
       >
         <Stack.Screen name="Welcome" component={WelcomeScreen} />
-        <Stack.Screen name="MainTabs" component={MainTabs} />
+        <Stack.Screen name="PersonalDetails" component={PersonalDetailsScreen} />
+        <Stack.Screen name="Goal" component={GoalScreen} />
+        <Stack.Screen name="Challenge" component={ChallengeScreen} />
+        <Stack.Screen name="Preferences" component={PreferencesScreen} />
+        <Stack.Screen name="Reaction" component={ReactionScreen} />
+        <Stack.Screen name="ActivityLevel" component={ActivityLevelScreen} />
+        <Stack.Screen name="Exercise" component={ExerciseScreen} />
+        <Stack.Screen name="ExerciseType" component={ExerciseTypeScreen} />
+        <Stack.Screen name="JourneyStart" component={JourneyStartScreen} />
+
+        <Stack.Screen name="Login">
+          {(props) => <LoginScreen {...props} setIsLoggedIn={setIsLoggedIn} />}
+        </Stack.Screen>
+
+        {isLoggedIn && (
+          <Stack.Screen name="MainTabs" component={MainTabs} />
+        )}
       </Stack.Navigator>
     </NavigationContainer>
   );
