@@ -173,11 +173,16 @@ class IncrementalConfig:
     output_dir: str = "./outputs"
     runs_dir: str = "./runs"
     model_name: str = ""
+    base_checkpoint_path: str = ""
+    base_report_path: str = ""
+    output_checkpoint_path: str = ""
+    output_report_path: str = ""
+    promote_to_best: bool = True
 
     # Food-101 replay to prevent catastrophic forgetting
-    replay_train_samples: int = 2000
-    replay_val_samples: int = 300
-    replay_test_samples: int = 600
+    replay_train_samples: int = 12000
+    replay_val_samples: int = 1500
+    replay_test_samples: int = 5000
 
     # Auto-split ratios when a dataset has no explicit val/test split
     extra_val_split: float = 0.15
@@ -187,8 +192,8 @@ class IncrementalConfig:
     batch_size: int = 16
     eval_batch_size: int = 16
     warmup_epochs: int = 1
-    finetune_epochs: int = 3
-    learning_rate: float = 3e-4
+    finetune_epochs: int = 6
+    learning_rate: float = 1e-4
     weight_decay: float = 1e-4
     num_workers: int = 2
     seed: int = 42

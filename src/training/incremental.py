@@ -899,7 +899,7 @@ def prepare_incremental_dataloaders(
 # ---------------------------------------------------------------------------
 
 def load_base_report(config: IncrementalConfig) -> Dict:
-    report_path = Path(config.runs_dir) / "report.json"
+    report_path = Path(config.base_report_path) if str(config.base_report_path).strip() else (Path(config.runs_dir) / "report.json")
     if not report_path.exists():
         raise FileNotFoundError(
             f"Base report not found at {report_path}. Run baseline training first: python main.py train"
@@ -918,7 +918,11 @@ def validate_incremental_base_artifacts(
     report architecture and class count.
     """
     runs_dir = Path(inc_config.runs_dir).resolve()
-    ckpt_path = runs_dir / "best_model.pth"
+    ckpt_path = (
+        Path(inc_config.base_checkpoint_path).resolve()
+        if str(inc_config.base_checkpoint_path).strip()
+        else (runs_dir / "best_model.pth")
+    )
 
     if not ckpt_path.is_file():
         raise FileNotFoundError(
@@ -1061,7 +1065,11 @@ def main(inc_config: Optional[IncrementalConfig] = None) -> None:
         print(f"New classes ({len(data_summary['new_class_names'])}): {preview}{' ...' if len(data_summary['new_class_names']) > 15 else ''}")
 
     model = build_model(model_name, num_classes=len(merged_class_names), pretrained=False)
-    checkpoint_path = Path(inc_config.runs_dir) / "best_model.pth"
+    checkpoint_path = (
+        Path(inc_config.base_checkpoint_path).resolve()
+        if str(inc_config.base_checkpoint_path).strip()
+        else (Path(inc_config.runs_dir) / "best_model.pth")
+    )
     copied = load_expanded_checkpoint(model, model_name, checkpoint_path, base_class_names, merged_class_names)
     if copied != len(base_class_names):
         raise RuntimeError(
@@ -1077,7 +1085,16 @@ def main(inc_config: Optional[IncrementalConfig] = None) -> None:
 
     runs_dir = Path(inc_config.runs_dir)
     runs_dir.mkdir(parents=True, exist_ok=True)
-    best_model_path = runs_dir / "best_model.pth"
+    best_model_path = (
+        Path(inc_config.output_checkpoint_path).resolve()
+        if str(inc_config.output_checkpoint_path).strip()
+        else (runs_dir / "best_model.pth")
+    )
+    report_path = (
+        Path(inc_config.output_report_path).resolve()
+        if str(inc_config.output_report_path).strip()
+        else (runs_dir / "report.json")
+    )
 
     report = {
         "best_model_name": model_name,
@@ -1099,21 +1116,49 @@ def main(inc_config: Optional[IncrementalConfig] = None) -> None:
     }
 
     should_promote, rejection_reasons = evaluate_promotion_decision(base_report, result, inc_config)
+    if not inc_config.promote_to_best:
+        should_promote = False
+        rejection_reasons = rejection_reasons + ["promotion disabled by config (promote_to_best=False)"]
     report["promotion_decision"] = {"promoted_to_best": should_promote, "rejection_reasons": rejection_reasons}
+
+    save_candidate_only = (
+        not should_promote
+        and str(inc_config.output_checkpoint_path).strip()
+    )
 
     if should_promote:
         if inc_config.backup_previous_best:
             backup_existing_artifacts(runs_dir)
+        best_model_path.parent.mkdir(parents=True, exist_ok=True)
+        report_path.parent.mkdir(parents=True, exist_ok=True)
         torch.save(result["model"].state_dict(), best_model_path)
-        with open(runs_dir / "report.json", "w", encoding="utf-8") as f:
+        with open(report_path, "w", encoding="utf-8") as f:
             json.dump(report, f, indent=2)
-        print(f"\nPromotion: updated best checkpoint and report.")
+        print(f"\nPromotion: updated checkpoint and report.")
+        print(f"  checkpoint -> {best_model_path}")
+        print(f"  report     -> {report_path}")
+    elif save_candidate_only:
+        best_model_path.parent.mkdir(parents=True, exist_ok=True)
+        report_path.parent.mkdir(parents=True, exist_ok=True)
+        torch.save(result["model"].state_dict(), best_model_path)
+        with open(report_path, "w", encoding="utf-8") as f:
+            json.dump(report, f, indent=2)
+        print("\nPromotion: skipped (candidate-only run).")
+        for reason in rejection_reasons:
+            print(f"  Reason: {reason}")
+        print(f"  checkpoint -> {best_model_path}")
+        print(f"  report     -> {report_path}")
     else:
-        with open(runs_dir / "last_incremental_report.json", "w", encoding="utf-8") as f:
+        fallback_report = (
+            report_path if str(inc_config.output_report_path).strip() else (runs_dir / "last_incremental_report.json")
+        )
+        fallback_report.parent.mkdir(parents=True, exist_ok=True)
+        with open(fallback_report, "w", encoding="utf-8") as f:
             json.dump(report, f, indent=2)
         print("\nPromotion: REJECTED — degradation threshold triggered.")
         for reason in rejection_reasons:
             print(f"  Reason: {reason}")
+        print(f"  report -> {fallback_report}")
 
     old_top1 = base_metrics.get("test_top1_accuracy")
     old_top3 = base_metrics.get("test_top3_accuracy")

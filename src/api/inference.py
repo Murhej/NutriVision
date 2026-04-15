@@ -23,6 +23,7 @@ import json
 import random
 from pathlib import Path
 from typing import Dict, List, Optional
+from urllib.parse import quote, unquote
 
 import torch
 from fastapi import FastAPI, File, HTTPException, UploadFile
@@ -30,11 +31,142 @@ from fastapi.responses import FileResponse
 from PIL import Image
 
 from src.core.model import build_dataset_index, build_model, forward_with_tta
+from src.training.incremental import normalize_label
 
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
 OUTPUTS_DIR = BASE_DIR / "outputs"
 RUNS_DIR = BASE_DIR / "runs"
 DATA_DIR = BASE_DIR / "data"
+
+
+def _is_image_file(path: Path) -> bool:
+    return path.suffix.lower() in {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
+
+
+def _build_class_sample_index(data_dir: Path, class_names: List[str]) -> Dict[str, str]:
+    """
+    Build one representative image path per class name.
+
+    Strategy (fast, no full directory walk):
+    1. Exact lookup in Food-101 images/<class>/ folder.
+    2. Targeted scan of each known extra-source training directory using prefix
+       matching so canonicalised names like 'apple' are resolved from dirs named
+       'Apple Braeburn 1' (normalises to 'apple_braeburn_1').
+    3. Shallow scan of any *_incremental staging dirs as last resort.
+    """
+    sample_index: Dict[str, str] = {}
+    unresolved: set = set(class_names)
+
+    # Build exact and prefix lookup structures once.
+    normalized_to_class: Dict[str, str] = {}
+    for name in class_names:
+        norm = normalize_label(name)
+        if norm not in normalized_to_class:
+            normalized_to_class[norm] = name
+    # Sorted longest-first so more specific prefixes win.
+    sorted_norms = sorted(normalized_to_class.keys(), key=len, reverse=True)
+
+    def _grab_image(cls_dir: Path, cls: str) -> bool:
+        """Pick the first image from cls_dir and record it. Returns True on success."""
+        if cls not in unresolved:
+            return False
+        for item in cls_dir.iterdir():
+            if item.is_file() and _is_image_file(item):
+                sample_index[cls] = str(item)
+                unresolved.discard(cls)
+                return True
+        return False
+
+    def _match(norm_dir: str) -> Optional[str]:
+        """Return the class name for a normalised directory name (exact or prefix)."""
+        if norm_dir in normalized_to_class:
+            return normalized_to_class[norm_dir]
+        for norm_cls in sorted_norms:
+            if norm_dir == norm_cls or norm_dir.startswith(norm_cls + "_"):
+                return normalized_to_class[norm_cls]
+        return None
+
+    def _scan_split_dir(split_dir: Path) -> None:
+        """Scan one level of class subdirs under split_dir."""
+        if not split_dir.is_dir():
+            return
+        for cls_dir in split_dir.iterdir():
+            if not cls_dir.is_dir() or not unresolved:
+                continue
+            cls = _match(normalize_label(cls_dir.name))
+            if cls and cls in unresolved:
+                _grab_image(cls_dir, cls)
+
+    # ── Fast path 1: Food-101 images folder ──────────────────────────────────
+    food101_images = data_dir / "food-101" / "images"
+    for class_name in list(unresolved):
+        cls_dir = food101_images / class_name
+        if cls_dir.is_dir():
+            _grab_image(cls_dir, class_name)
+
+    if not unresolved:
+        return sample_index
+
+    # ── Fast path 2: Known extra-source training dirs ─────────────────────────
+    # Import lazily to avoid hard coupling at module load time.
+    try:
+        from src.training.incremental import KNOWN_RAW_SOURCES, find_existing_source_root  # type: ignore
+        for spec in KNOWN_RAW_SOURCES:
+            if not unresolved:
+                break
+            source_root = find_existing_source_root(spec)
+            if source_root is None:
+                continue
+            split_dirs: List[Path] = []
+            for key in ("train_subdir", "test_subdir"):
+                sd = spec.get(key)
+                if sd and sd != ".":
+                    split_dirs.append(source_root / sd)
+            for fb in spec.get("fallback_train_subdirs", []):
+                split_dirs.append(source_root / fb)
+            if not split_dirs:
+                split_dirs.append(source_root)
+            for split_dir in split_dirs:
+                _scan_split_dir(split_dir)
+    except ImportError:
+        pass
+
+    # ── Fallback: shallow scan of staging/incremental dirs ───────────────────
+    if unresolved:
+        for inc_dir in data_dir.glob("*_incremental"):
+            if not unresolved:
+                break
+            for split_dir in inc_dir.iterdir():
+                if split_dir.is_dir():
+                    _scan_split_dir(split_dir)
+
+    return sample_index
+
+
+def _resolve_class_sample_path(class_name: str, class_sample_index: Dict[str, str]) -> Optional[str]:
+    """Resolve a class sample path with normalization and suffix fallback."""
+    if class_name in class_sample_index:
+        return class_sample_index[class_name]
+
+    norm_requested = normalize_label(class_name)
+    norm_to_path: Dict[str, str] = {}
+    for key, path in class_sample_index.items():
+        norm_key = normalize_label(key)
+        if norm_key not in norm_to_path:
+            norm_to_path[norm_key] = path
+
+    # Exact normalized match.
+    if norm_requested in norm_to_path:
+        return norm_to_path[norm_requested]
+
+    # Try dropping right-side suffixes: zucchini_green -> zucchini.
+    parts = norm_requested.split("_")
+    while len(parts) > 1:
+        parts = parts[:-1]
+        candidate = "_".join(parts)
+        if candidate in norm_to_path:
+            return norm_to_path[candidate]
+    return None
 
 
 def _load_model_and_config() -> Dict:
@@ -69,6 +201,9 @@ def _load_model_and_config() -> Dict:
     _state["class_names"] = class_names
     _state["dataset"] = dataset
     _state["tta_views"] = tta_views
+    class_sample_index = _build_class_sample_index(DATA_DIR, list(class_names))
+    _state["class_sample_index"] = class_sample_index
+    _state["sample_classes"] = sorted(class_sample_index.keys())
 
     dataset_index = build_dataset_index(DATA_DIR, "test", list(dataset.classes))
     if len(dataset_index) != len(dataset):
@@ -82,6 +217,7 @@ def _load_model_and_config() -> Dict:
 
     print(f"[OK] Model loaded: {model_name}")
     print(f"[OK] Classes: {len(class_names)}")
+    print(f"[OK] Class samples indexed: {len(class_sample_index)}")
     print(f"[OK] Test dataset: {len(dataset)} images")
     return report
 
@@ -126,8 +262,17 @@ def _predict_pil_image(image: Image.Image) -> Dict:
 
     probs = torch.nn.functional.softmax(output, dim=1)
     top3_prob, top3_idx = probs.topk(3, dim=1)
+    class_sample_index: Dict[str, str] = state.get("class_sample_index") or {}
     predictions = [
-        {"rank": i + 1, "class": class_names[top3_idx[0][i].item()], "confidence": float(top3_prob[0][i].item() * 100)}
+        {
+            "rank": i + 1,
+            "class": class_names[top3_idx[0][i].item()],
+            "confidence": float(top3_prob[0][i].item() * 100),
+            "sample_image_url": (
+                f"/class/sample/{quote(class_names[top3_idx[0][i].item()], safe='')}"
+                if class_names[top3_idx[0][i].item()] in class_sample_index else None
+            ),
+        }
         for i in range(3)
     ]
     return {"success": True, "predictions": predictions, "image_size": list(image.size)}
@@ -169,8 +314,51 @@ def register_routes(app: FastAPI) -> None:
         class_names = state.get("class_names")
         if class_names is None:
             raise HTTPException(status_code=503, detail="Model not loaded")
-        dataset_class_names = state.get("dataset_class_names") or class_names
-        return {"classes": dataset_class_names, "count": len(dataset_class_names), "all_classes": class_names, "total_count": len(class_names)}
+        dataset_class_names = state.get("dataset_class_names") or []
+        sample_classes = state.get("sample_classes") or []
+        return {
+            "classes": class_names,
+            "count": len(class_names),
+            "all_classes": class_names,
+            "total_count": len(class_names),
+            "dataset_classes": dataset_class_names,
+            "dataset_count": len(dataset_class_names),
+            "sample_classes": sample_classes,
+            "sample_count": len(sample_classes),
+        }
+
+    @app.get("/class/sample/{class_name}")
+    async def get_class_sample_image(class_name: str):
+        state = _get_state()
+        class_sample_index: Dict[str, str] = state.get("class_sample_index") or {}
+        decoded = unquote(class_name)
+        sample_path = _resolve_class_sample_path(decoded, class_sample_index)
+        if not sample_path:
+            raise HTTPException(status_code=404, detail=f"No sample image found for class: {decoded}")
+        return FileResponse(Path(sample_path))
+
+    @app.get("/predict/class-sample/{class_name}")
+    async def predict_class_sample(class_name: str):
+        state = _get_state()
+        class_sample_index: Dict[str, str] = state.get("class_sample_index") or {}
+        decoded = unquote(class_name)
+        sample_path = _resolve_class_sample_path(decoded, class_sample_index)
+        if not sample_path:
+            raise HTTPException(status_code=404, detail=f"No sample image found for class: {decoded}")
+        try:
+            with Image.open(sample_path) as img:
+                result = _predict_pil_image(img.convert("RGB"))
+        except HTTPException:
+            raise
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=f"Error processing class sample image: {exc}")
+        result["sample"] = {
+            "index": None,
+            "true_label": decoded,
+            "label_index": None,
+            "image_url": f"/class/sample/{quote(decoded, safe='')}",
+        }
+        return result
 
     @app.post("/predict")
     async def predict(file: UploadFile = File(...)):
@@ -216,6 +404,17 @@ def register_routes(app: FastAPI) -> None:
             try:
                 class_idx = list(dataset_class_names).index(category)
             except ValueError:
+                # Category may exist only in merged incremental classes; serve its sample image.
+                class_sample_index: Dict[str, str] = state.get("class_sample_index") or {}
+                sample_path = _resolve_class_sample_path(category, class_sample_index)
+                if sample_path:
+                    return {
+                        "index": None,
+                        "image_path": sample_path,
+                        "true_label": category,
+                        "label_index": None,
+                        "image_url": f"/class/sample/{quote(category, safe='')}",
+                    }
                 raise HTTPException(status_code=404, detail=f"Category not found: {category}")
             matching = [item["index"] for item in dataset_index if item["label_index"] == class_idx]
             if not matching:

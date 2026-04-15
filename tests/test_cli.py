@@ -66,6 +66,29 @@ def test_incremental_datasets_flags():
     assert args.only_datasets is True
 
 
+def test_incremental_new_path_and_replay_flags():
+    parser = _build_parser()
+    args = parser.parse_args([
+        "incremental",
+        "--base-checkpoint", "runs/base.pth",
+        "--base-report", "runs/base_report.json",
+        "--output-checkpoint", "runs/new_inc.pth",
+        "--output-report", "runs/new_inc_report.json",
+        "--no-promote",
+        "--replay-train", "10000",
+        "--replay-val", "1200",
+        "--replay-test", "4000",
+    ])
+    assert args.base_checkpoint == "runs/base.pth"
+    assert args.base_report == "runs/base_report.json"
+    assert args.output_checkpoint == "runs/new_inc.pth"
+    assert args.output_report == "runs/new_inc_report.json"
+    assert args.no_promote is True
+    assert args.replay_train == 10000
+    assert args.replay_val == 1200
+    assert args.replay_test == 4000
+
+
 def test_download_subcommand_exists():
     parser = _build_parser()
     args = parser.parse_args(["download"])
@@ -240,3 +263,32 @@ def test_cmd_incremental_passes_selected_datasets_and_strict_mode():
         assert cfg.auto_discover_extra_data_dirs is False
         assert cfg.use_raw_known_sources is True
         assert cfg.extra_data_dirs == []
+
+
+def test_cmd_incremental_passes_path_and_replay_overrides():
+    from main import _cmd_incremental
+
+    args = argparse.Namespace(
+        datasets=None,
+        only_datasets=False,
+        base_checkpoint="runs/base.pth",
+        base_report="runs/base_report.json",
+        output_checkpoint="runs/inc_candidate.pth",
+        output_report="runs/inc_candidate_report.json",
+        no_promote=True,
+        replay_train=9000,
+        replay_val=1000,
+        replay_test=3500,
+    )
+    with patch("src.training.incremental.main") as mock_main:
+        _cmd_incremental(args)
+        mock_main.assert_called_once()
+        cfg = mock_main.call_args.args[0]
+        assert cfg.base_checkpoint_path == "runs/base.pth"
+        assert cfg.base_report_path == "runs/base_report.json"
+        assert cfg.output_checkpoint_path == "runs/inc_candidate.pth"
+        assert cfg.output_report_path == "runs/inc_candidate_report.json"
+        assert cfg.promote_to_best is False
+        assert cfg.replay_train_samples == 9000
+        assert cfg.replay_val_samples == 1000
+        assert cfg.replay_test_samples == 3500

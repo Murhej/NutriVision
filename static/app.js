@@ -192,7 +192,10 @@ async function loadCategories() {
     try {
         const data = await fetchJson('/classes');
         elements.categorySelect.innerHTML = '<option value="">Pick a dataset category</option>';
-        data.classes.forEach((className) => {
+        const categoryList = Array.isArray(data.sample_classes) && data.sample_classes.length
+            ? data.sample_classes
+            : (Array.isArray(data.classes) ? data.classes : []);
+        categoryList.forEach((className) => {
             const option = document.createElement('option');
             option.value = className;
             option.textContent = formatFoodLabel(className);
@@ -302,10 +305,20 @@ async function loadCategoryImage() {
         state.currentSource = 'dataset';
         state.currentDatasetIndex = data.index;
         state.currentDatasetSample = data;
-        state.previewTransferUrl = buildApiUrl(`/dataset/image/${data.index}`);
-        showDatasetInfo(`Dataset sample | ${formatFoodLabel(data.true_label)} | #${data.index}`);
-        showImagePreview(buildApiUrl(`/dataset/image/${data.index}`));
-        await predictDatasetImage();
+        const imageUrl = data.image_url || (data.index !== null ? `/dataset/image/${data.index}` : '');
+        const resolvedImageUrl = imageUrl ? (String(imageUrl).startsWith('http') ? imageUrl : buildApiUrl(imageUrl)) : '';
+        state.previewTransferUrl = resolvedImageUrl;
+        showDatasetInfo(`Dataset sample | ${formatFoodLabel(data.true_label)}${data.index !== null ? ` | #${data.index}` : ''}`);
+        if (resolvedImageUrl) {
+            showImagePreview(resolvedImageUrl);
+        }
+        if (data.index !== null && data.index !== undefined) {
+            await predictDatasetImage();
+        } else {
+            const predicted = await fetchJson(`/predict/class-sample/${encodeURIComponent(category)}`);
+            state.currentDatasetSample = predicted.sample || state.currentDatasetSample;
+            handlePredictionResult(predicted);
+        }
     } catch (error) {
         showError(`Could not load category image: ${error.message}`);
     } finally {
@@ -387,8 +400,21 @@ function renderPredictionOptions() {
 
         const thumb = document.createElement('img');
         thumb.className = 'prediction-thumb';
-        thumb.src = previewSrc;
         thumb.alt = formatFoodLabel(prediction.class);
+        thumb.loading = 'lazy';
+        // Start with the uploaded image as placeholder so the card never
+        // appears blank.  Then asynchronously swap in the class sample image:
+        // prefer the URL the server already resolved, otherwise ask the
+        // /class/sample/ endpoint (which does fuzzy prefix matching).
+        const fallbackSrc = previewSrc;
+        thumb.src = fallbackSrc;
+        const sampleUrl = prediction.sample_image_url
+            ? buildApiUrl(prediction.sample_image_url)
+            : buildApiUrl(`/class/sample/${encodeURIComponent(prediction.class)}`);
+        const probe = new window.Image();
+        probe.onload = () => { thumb.src = sampleUrl; };
+        // onerror: thumb keeps the uploaded-image placeholder
+        probe.src = sampleUrl;
 
         const textWrap = document.createElement('div');
 

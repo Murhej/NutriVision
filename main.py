@@ -97,6 +97,37 @@ def _cmd_incremental(args: argparse.Namespace) -> None:
         inc.use_raw_known_sources = True
         inc.extra_data_dirs = []
 
+    base_checkpoint = getattr(args, "base_checkpoint", None)
+    if base_checkpoint:
+        inc.base_checkpoint_path = str(base_checkpoint)
+
+    base_report = getattr(args, "base_report", None)
+    if base_report:
+        inc.base_report_path = str(base_report)
+
+    output_checkpoint = getattr(args, "output_checkpoint", None)
+    if output_checkpoint:
+        inc.output_checkpoint_path = str(output_checkpoint)
+
+    output_report = getattr(args, "output_report", None)
+    if output_report:
+        inc.output_report_path = str(output_report)
+
+    if getattr(args, "no_promote", False):
+        inc.promote_to_best = False
+
+    replay_train = getattr(args, "replay_train", None)
+    if replay_train is not None:
+        inc.replay_train_samples = int(replay_train)
+
+    replay_val = getattr(args, "replay_val", None)
+    if replay_val is not None:
+        inc.replay_val_samples = int(replay_val)
+
+    replay_test = getattr(args, "replay_test", None)
+    if replay_test is not None:
+        inc.replay_test_samples = int(replay_test)
+
     main(inc)
 
 
@@ -175,6 +206,49 @@ def _build_parser() -> argparse.ArgumentParser:
             "Strict mode for --datasets: disable custom extra_data_dirs and auto-discovery, "
             "so only the selected known raw datasets are used."
         ),
+    )
+    inc_p.add_argument(
+        "--base-checkpoint",
+        metavar="PATH",
+        help="Checkpoint to start from (default: runs/best_model.pth).",
+    )
+    inc_p.add_argument(
+        "--base-report",
+        metavar="PATH",
+        help="Report JSON to use as base metadata (default: runs/report.json).",
+    )
+    inc_p.add_argument(
+        "--output-checkpoint",
+        metavar="PATH",
+        help="Where to save trained checkpoint if promoted (default: runs/best_model.pth).",
+    )
+    inc_p.add_argument(
+        "--output-report",
+        metavar="PATH",
+        help="Where to save report JSON if promoted (default: runs/report.json).",
+    )
+    inc_p.add_argument(
+        "--no-promote",
+        action="store_true",
+        help="Do not overwrite current best artifacts; write report only to last_incremental_report.json (or --output-report).",
+    )
+    inc_p.add_argument(
+        "--replay-train",
+        type=int,
+        metavar="N",
+        help="Replay sample count from Food-101 train split.",
+    )
+    inc_p.add_argument(
+        "--replay-val",
+        type=int,
+        metavar="N",
+        help="Replay sample count from Food-101 test split for validation.",
+    )
+    inc_p.add_argument(
+        "--replay-test",
+        type=int,
+        metavar="N",
+        help="Replay sample count from Food-101 test split for testing.",
     )
     sub.add_parser("evaluate",    help="Per-class accuracy analysis on the test set")
     sub.add_parser("serve",       help="Start the FastAPI server on port 8000")
