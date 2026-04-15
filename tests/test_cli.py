@@ -56,6 +56,20 @@ def test_incremental_subcommand_exists():
     assert args.command == "incremental"
 
 
+def test_download_subcommand_exists():
+    parser = _build_parser()
+    args = parser.parse_args(["download"])
+    assert args.command == "download"
+    assert getattr(args, "full_copy", False) is False
+
+
+def test_download_full_copy_flag():
+    parser = _build_parser()
+    args = parser.parse_args(["download", "--full-copy"])
+    assert args.command == "download"
+    assert args.full_copy is True
+
+
 # ---------------------------------------------------------------------------
 # train --models flag
 # ---------------------------------------------------------------------------

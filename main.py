@@ -13,7 +13,8 @@ Usage:
     python main.py incremental                  # incremental fine-tuning
     python main.py evaluate                     # per-class accuracy analysis on test set
     python main.py serve                        # start API server on :8000
-    python main.py download                     # download & stage Kaggle datasets
+    python main.py download                     # download & stage (default: link into kagglehub cache)
+    python main.py download --full-copy         # copy files into data/ (slower; independent of cache)
 """
 
 from __future__ import annotations
@@ -94,9 +95,9 @@ def _cmd_serve(_args: argparse.Namespace) -> None:
     uvicorn.run(app, host="0.0.0.0", port=8000, log_level="info")
 
 
-def _cmd_download(_args: argparse.Namespace) -> None:
+def _cmd_download(args: argparse.Namespace) -> None:
     from src.training.datasets import main
-    main()
+    main(full_copy=bool(getattr(args, "full_copy", False)))
 
 
 # ---------------------------------------------------------------------------
@@ -138,7 +139,22 @@ def _build_parser() -> argparse.ArgumentParser:
     sub.add_parser("incremental", help="Incremental fine-tuning on custom datasets")
     sub.add_parser("evaluate",    help="Per-class accuracy analysis on the test set")
     sub.add_parser("serve",       help="Start the FastAPI server on port 8000")
-    sub.add_parser("download",    help="Download & stage Kaggle datasets into data/")
+    dl_p = sub.add_parser(
+        "download",
+        help=(
+            "Download & stage Kaggle datasets into data/. "
+            "Default: junction/symlink into the kagglehub cache (fast; data/ is bound to that cache)."
+        ),
+    )
+    dl_p.add_argument(
+        "--full-copy",
+        action="store_true",
+        help=(
+            "Copy every file into data/ instead of linking to the kagglehub cache (slower, uses more disk). "
+            "Use if you need a standalone data/ folder or plan to delete the cache. "
+            "Or set NUTRIVISION_DOWNLOAD_FULL_COPY=1."
+        ),
+    )
 
     return parser
 
@@ -163,7 +179,7 @@ def _interactive_menu() -> None:
         "incremental": "Incremental fine-tuning on custom datasets",
         "evaluate":    "Per-class accuracy analysis on test set",
         "serve":       "Start the FastAPI server on port 8000",
-        "download":    "Download & stage Kaggle datasets into data/",
+        "download":    "Download & stage Kaggle datasets (default: link into kagglehub cache)",
     }
     print("Available commands:")
     for i, cmd in enumerate(items, 1):
