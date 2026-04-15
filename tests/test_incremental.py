@@ -281,8 +281,53 @@ def test_samples_dataset_corrupted_file_raises(tmp_path: Path):
 # signature: evaluate_promotion_decision(base_report, result, config) -> (bool, list)
 # ---------------------------------------------------------------------------
 
-from src.training.incremental import evaluate_promotion_decision
+from src.training.incremental import evaluate_promotion_decision, validate_incremental_base_artifacts
 from src.training.config import IncrementalConfig
+
+
+def test_validate_incremental_base_artifacts_ok(tmp_path: Path):
+    runs = tmp_path / "runs"
+    runs.mkdir(parents=True)
+    n = 3
+    torch.save(
+        {"fc.weight": torch.zeros(n, 64), "fc.bias": torch.zeros(n)},
+        runs / "best_model.pth",
+    )
+    report = {
+        "best_model_name": "resnet50",
+        "class_names": ["apple", "banana", "citrus"],
+        "num_classes": n,
+        "best_model_metrics": {},
+    }
+    cfg = IncrementalConfig(runs_dir=str(runs))
+    validate_incremental_base_artifacts(cfg, report, ["apple", "banana", "citrus"])
+
+
+def test_validate_incremental_base_artifacts_class_mismatch(tmp_path: Path):
+    runs = tmp_path / "runs"
+    runs.mkdir(parents=True)
+    torch.save(
+        {"fc.weight": torch.zeros(2, 64), "fc.bias": torch.zeros(2)},
+        runs / "best_model.pth",
+    )
+    report = {
+        "best_model_name": "resnet50",
+        "class_names": ["a", "b", "c"],
+        "num_classes": 3,
+    }
+    cfg = IncrementalConfig(runs_dir=str(runs))
+    with pytest.raises(ValueError, match="out_features"):
+        validate_incremental_base_artifacts(cfg, report, ["a", "b", "c"])
+
+
+def test_validate_incremental_base_artifacts_missing_head_keys(tmp_path: Path):
+    runs = tmp_path / "runs"
+    runs.mkdir(parents=True)
+    torch.save({"fc.weight": torch.zeros(3, 64)}, runs / "best_model.pth")
+    report = {"best_model_name": "resnet50", "class_names": ["a", "b", "c"], "num_classes": 3}
+    cfg = IncrementalConfig(runs_dir=str(runs))
+    with pytest.raises(ValueError, match="missing classifier"):
+        validate_incremental_base_artifacts(cfg, report, ["a", "b", "c"])
 
 
 def test_promotion_accepted_when_accuracy_improves():

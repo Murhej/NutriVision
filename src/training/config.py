@@ -196,7 +196,7 @@ class IncrementalConfig:
     # Dataset handling
     auto_stage_known_sources: bool = False
     refresh_staged_sources: bool = False
-    backup_previous_best: bool = False
+    backup_previous_best: bool = True
     use_raw_known_sources: bool = True
     include_extra_data_dirs_when_raw_available: bool = False
 

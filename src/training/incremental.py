@@ -35,7 +35,7 @@ from torch.utils.data import ConcatDataset, DataLoader, Dataset, Subset
 from torchvision.datasets import Food101, ImageFolder
 
 from src.core.device import get_device, log_environment_info, set_seed
-from src.core.model import build_model, classifier_head_keys
+from src.core.model import SUPPORTED_MODELS, build_model, classifier_head_keys
 from src.core.transforms import get_transforms
 from src.training.config import Config as TrainConfig
 from src.training.config import IncrementalConfig
@@ -877,6 +877,81 @@ def load_base_report(config: IncrementalConfig) -> Dict:
         return json.load(f)
 
 
+def validate_incremental_base_artifacts(
+    inc_config: IncrementalConfig,
+    base_report: Dict,
+    base_class_names: List[str],
+) -> None:
+    """
+    Fail fast before heavy data loading: checkpoint exists, loads, and matches
+    report architecture and class count.
+    """
+    runs_dir = Path(inc_config.runs_dir).resolve()
+    ckpt_path = runs_dir / "best_model.pth"
+
+    if not ckpt_path.is_file():
+        raise FileNotFoundError(
+            f"Missing baseline checkpoint: {ckpt_path}. Run baseline training first: python main.py train"
+        )
+    size = ckpt_path.stat().st_size
+    if size < 512:
+        raise ValueError(
+            f"Baseline checkpoint is too small ({size} bytes) to be valid: {ckpt_path}"
+        )
+
+    model_name = (inc_config.model_name or base_report.get("best_model_name") or "").strip()
+    if not model_name:
+        raise ValueError(
+            "Set best_model_name in runs/report.json or IncrementalConfig.model_name before incremental training."
+        )
+    if model_name not in SUPPORTED_MODELS:
+        raise ValueError(
+            f"Unknown base model {model_name!r}. Supported: {SUPPORTED_MODELS}"
+        )
+
+    num_base = len(base_class_names)
+    if num_base < 2:
+        raise ValueError(
+            f"Base class list is too small ({num_base} entries). Fix runs/report.json class_names."
+        )
+
+    report_num = base_report.get("num_classes")
+    if report_num is not None and int(report_num) != num_base:
+        raise ValueError(
+            f"runs/report.json num_classes ({report_num}) does not match len(class_names) ({num_base})."
+        )
+
+    raw_names = base_report.get("class_names")
+    if isinstance(raw_names, list) and len(raw_names) != num_base:
+        raise ValueError(
+            "runs/report.json class_names length does not match normalized base_class_names count."
+        )
+
+    try:
+        state = torch.load(ckpt_path, map_location="cpu", weights_only=True)
+    except Exception as exc:
+        raise ValueError(f"Could not load checkpoint {ckpt_path}: {exc}") from exc
+
+    if not isinstance(state, dict):
+        raise ValueError(f"Checkpoint must be a state_dict mapping, got {type(state).__name__}")
+
+    wkey, bkey = classifier_head_keys(model_name)
+    w = state.get(wkey)
+    b = state.get(bkey)
+    if w is None or b is None:
+        raise ValueError(
+            f"Checkpoint missing classifier keys {wkey} / {bkey} for model {model_name}. "
+            "Wrong checkpoint or architecture."
+        )
+    if w.dim() != 2 or b.dim() != 1:
+        raise ValueError(f"Unexpected classifier shapes: weight {tuple(w.shape)}, bias {tuple(b.shape)}")
+    if w.shape[0] != num_base or b.shape[0] != num_base:
+        raise ValueError(
+            f"Checkpoint classifier out_features={w.shape[0]} but report lists {num_base} classes. "
+            "Align runs/report.json with best_model.pth or re-run baseline training."
+        )
+
+
 def load_base_class_names(config: IncrementalConfig, report: Dict) -> List[str]:
     if report.get("class_names"):
         return [normalize_label(n) for n in report["class_names"]]
@@ -927,9 +1002,18 @@ def main() -> None:
 
     staged_sources = stage_known_raw_sources(inc_config)
     base_class_names = load_base_class_names(inc_config, base_report)
+    validate_incremental_base_artifacts(inc_config, base_report, base_class_names)
+
     train_loader, val_loader, test_loader, merged_class_names, data_summary = prepare_incremental_dataloaders(
         inc_config, train_config, base_class_names,
     )
+
+    if data_summary["extra_class_count"] < 1:
+        raise RuntimeError(
+            "Incremental aborted: no new classes found (extra_class_count=0). "
+            "Add ImageFolder data under data/custom_incremental/train/<class>/, "
+            "place raw datasets for KNOWN_RAW_SOURCES, or check auto_discover / extra_data_dirs."
+        )
 
     print("\n" + "=" * 60)
     print("INCREMENTAL FINE-TUNING")
@@ -947,6 +1031,11 @@ def main() -> None:
     model = build_model(model_name, num_classes=len(merged_class_names), pretrained=False)
     checkpoint_path = Path(inc_config.runs_dir) / "best_model.pth"
     copied = load_expanded_checkpoint(model, model_name, checkpoint_path, base_class_names, merged_class_names)
+    if copied != len(base_class_names):
+        raise RuntimeError(
+            f"Classifier weight transfer incomplete ({copied}/{len(base_class_names)} rows). "
+            "Baseline class_names likely do not match the checkpoint ordering or labels."
+        )
     print(f"Loaded {copied} classifier rows from previous checkpoint.")
 
     result = train_model(
