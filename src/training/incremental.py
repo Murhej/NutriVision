@@ -156,6 +156,23 @@ KNOWN_RAW_SOURCES = [
 ]
 
 
+def known_sources_for_config(config: IncrementalConfig) -> List[Dict]:
+    selected = config.selected_known_sources
+    if not selected:
+        return KNOWN_RAW_SOURCES
+    wanted = [normalize_label(name) for name in selected if str(name).strip()]
+    wanted_set = set(wanted)
+    known_names = {spec["name"] for spec in KNOWN_RAW_SOURCES}
+    unknown = sorted(name for name in wanted_set if name not in known_names)
+    if unknown:
+        raise ValueError(
+            "Unknown --datasets entries: "
+            + ", ".join(unknown)
+            + f". Available: {', '.join(sorted(known_names))}"
+        )
+    return [spec for spec in KNOWN_RAW_SOURCES if spec["name"] in wanted_set]
+
+
 # ---------------------------------------------------------------------------
 # Label normalisation and canonicalisation
 # ---------------------------------------------------------------------------
@@ -257,6 +274,20 @@ def find_existing_source_root(spec: Dict) -> Optional[Path]:
         root = Path(root_text)
         if root.exists():
             return root
+        # Fast staging may insert one version directory level (e.g. ".../dataset/87/...").
+        # Try to resolve by allowing one extra child directory at any path boundary.
+        parts = root.parts
+        for i in range(1, len(parts)):
+            prefix = Path(*parts[:i])
+            if not prefix.exists() or not prefix.is_dir():
+                continue
+            suffix = Path(*parts[i:])
+            for child in prefix.iterdir():
+                if not child.is_dir():
+                    continue
+                candidate = child / suffix
+                if candidate.exists():
+                    return candidate
     return None
 
 
@@ -565,7 +596,7 @@ def load_known_raw_extra_datasets(
 
     sources: List[Dict] = []
     occupied: set[str] = set()
-    for spec in KNOWN_RAW_SOURCES:
+    for spec in known_sources_for_config(config):
         source_root = find_existing_source_root(spec)
         if source_root is None:
             continue
@@ -610,7 +641,7 @@ def load_extra_datasets(config: IncrementalConfig, train_transform, test_transfo
         ))
 
     excluded = [Path(config.data_dir) / "food-101"] + [Path(r) for r in config.extra_data_dirs]
-    for spec in KNOWN_RAW_SOURCES:
+    for spec in known_sources_for_config(config):
         sr = find_existing_source_root(spec)
         if sr:
             excluded.append(sr)
@@ -744,7 +775,7 @@ def stage_known_raw_sources(config: IncrementalConfig) -> List[Dict]:
         return []
     cleared: set[str] = set()
     staged: List[Dict] = []
-    for spec in KNOWN_RAW_SOURCES:
+    for spec in known_sources_for_config(config):
         source_root = find_existing_source_root(spec)
         if source_root is None:
             continue
@@ -978,9 +1009,10 @@ def _fmt_delta(new: float, old: Optional[float]) -> str:
 # Main entrypoint
 # ---------------------------------------------------------------------------
 
-def main() -> None:
+def main(inc_config: Optional[IncrementalConfig] = None) -> None:
     start_time = time.time()
-    inc_config = IncrementalConfig()
+    if inc_config is None:
+        inc_config = IncrementalConfig()
 
     base_report = load_base_report(inc_config)
     model_name = inc_config.model_name or base_report["best_model_name"]

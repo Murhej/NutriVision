@@ -21,7 +21,9 @@ from __future__ import annotations
 
 import argparse
 import sys
+from typing import List
 
+from src.training.config import IncrementalConfig
 
 # ---------------------------------------------------------------------------
 # GPU banner
@@ -75,9 +77,27 @@ def _cmd_train(args: argparse.Namespace) -> None:
     train_main(models_to_train=models_to_train, resume_model=resume_model)
 
 
-def _cmd_incremental(_args: argparse.Namespace) -> None:
+def _csv_list(value: str) -> List[str]:
+    return [item.strip() for item in str(value).split(",") if item.strip()]
+
+
+def _cmd_incremental(args: argparse.Namespace) -> None:
     from src.training.incremental import main
-    main()
+
+    inc = IncrementalConfig()
+    datasets_arg = getattr(args, "datasets", None)
+    if datasets_arg:
+        selected = _csv_list(datasets_arg)
+        if not selected:
+            raise ValueError("--datasets was provided but empty after parsing.")
+        inc.selected_known_sources = selected
+
+    if getattr(args, "only_datasets", False):
+        inc.auto_discover_extra_data_dirs = False
+        inc.use_raw_known_sources = True
+        inc.extra_data_dirs = []
+
+    main(inc)
 
 
 def _cmd_evaluate(_args: argparse.Namespace) -> None:
@@ -135,8 +155,27 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Print available model names and exit.",
     )
 
-    # --- other commands (no extra flags for now) ---
-    sub.add_parser("incremental", help="Incremental fine-tuning on custom datasets")
+    inc_p = sub.add_parser("incremental", help="Incremental fine-tuning on custom datasets")
+    inc_p.add_argument(
+        "--datasets",
+        metavar="NAMES",
+        help=(
+            "Comma-separated known raw dataset names to include "
+            "(e.g. fruits_360,vegfru,uec_food_256). "
+            "Available names: uec_food_256, fruits_360, "
+            "fruit_and_vegetable_image_recognition, vegfru, "
+            "food_image_classification_dataset, indian_food_images_dataset, "
+            "indonesian_food_dataset, fast_food_classification_dataset."
+        ),
+    )
+    inc_p.add_argument(
+        "--only-datasets",
+        action="store_true",
+        help=(
+            "Strict mode for --datasets: disable custom extra_data_dirs and auto-discovery, "
+            "so only the selected known raw datasets are used."
+        ),
+    )
     sub.add_parser("evaluate",    help="Per-class accuracy analysis on the test set")
     sub.add_parser("serve",       help="Start the FastAPI server on port 8000")
     dl_p = sub.add_parser(

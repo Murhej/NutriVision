@@ -175,9 +175,9 @@ class IncrementalConfig:
     model_name: str = ""
 
     # Food-101 replay to prevent catastrophic forgetting
-    replay_train_samples: int = 4000
-    replay_val_samples: int = 600
-    replay_test_samples: int = 1200
+    replay_train_samples: int = 2000
+    replay_val_samples: int = 300
+    replay_test_samples: int = 600
 
     # Auto-split ratios when a dataset has no explicit val/test split
     extra_val_split: float = 0.15
@@ -190,7 +190,7 @@ class IncrementalConfig:
     finetune_epochs: int = 3
     learning_rate: float = 3e-4
     weight_decay: float = 1e-4
-    num_workers: int = 0
+    num_workers: int = 2
     seed: int = 42
 
     # Dataset handling
@@ -199,6 +199,7 @@ class IncrementalConfig:
     backup_previous_best: bool = True
     use_raw_known_sources: bool = True
     include_extra_data_dirs_when_raw_available: bool = False
+    selected_known_sources: Optional[List[str]] = None
 
     # Checkpoint protection
     protect_best_checkpoint: bool = True
@@ -206,7 +207,7 @@ class IncrementalConfig:
     max_allowed_test_top3_drop: float = 2.0
 
     # Auto-discovery
-    auto_discover_extra_data_dirs: bool = True
+    auto_discover_extra_data_dirs: bool = False
     discovery_max_depth: int = 4
     discovery_min_class_dirs: int = 2
 
@@ -228,4 +229,7 @@ class IncrementalConfig:
             data_dir=self.data_dir,
             output_dir=self.output_dir,
             runs_dir=self.runs_dir,
+            # Speed-first defaults for incremental runs on local GPUs.
+            # This keeps DataLoader workers/pin_memory active on Windows.
+            windows_stable_dataloader=False,
         )

@@ -54,6 +54,16 @@ def test_incremental_subcommand_exists():
     parser = _build_parser()
     args = parser.parse_args(["incremental"])
     assert args.command == "incremental"
+    assert getattr(args, "datasets", None) is None
+    assert getattr(args, "only_datasets", False) is False
+
+
+def test_incremental_datasets_flags():
+    parser = _build_parser()
+    args = parser.parse_args(["incremental", "--datasets", "fruits_360,vegfru", "--only-datasets"])
+    assert args.command == "incremental"
+    assert args.datasets == "fruits_360,vegfru"
+    assert args.only_datasets is True
 
 
 def test_download_subcommand_exists():
@@ -216,3 +226,17 @@ def test_cmd_train_no_models_arg_passes_none():
             models_to_train=None,
             resume_model=None,
         )
+
+
+def test_cmd_incremental_passes_selected_datasets_and_strict_mode():
+    from main import _cmd_incremental
+
+    args = argparse.Namespace(datasets="fruits_360,vegfru", only_datasets=True)
+    with patch("src.training.incremental.main") as mock_main:
+        _cmd_incremental(args)
+        mock_main.assert_called_once()
+        cfg = mock_main.call_args.args[0]
+        assert cfg.selected_known_sources == ["fruits_360", "vegfru"]
+        assert cfg.auto_discover_extra_data_dirs is False
+        assert cfg.use_raw_known_sources is True
+        assert cfg.extra_data_dirs == []
