@@ -488,6 +488,15 @@ USDA_NUTRIENT_NAME_MAP = {
     "sugar_g": {"sugars, total including nlea", "sugars, total"},
     "sodium_mg": {"sodium, na"},
     "cholesterol_mg": {"cholesterol"},
+    "vitaminA": {"vitamin a, rae"},
+    "vitaminC": {"vitamin c, total ascorbic acid"},
+    "vitaminD": {"vitamin d (d2 + d3)", "vitamin d (d2 + d3), international units"},
+    "vitaminE": {"vitamin e (alpha-tocopherol)"},
+    "vitaminK": {"vitamin k (phylloquinone)"},
+    "calcium": {"calcium, ca"},
+    "iron": {"iron, fe"},
+    "magnesium": {"magnesium, mg"},
+    "potassium": {"potassium, k"},
 }
 
 
@@ -572,6 +581,15 @@ def _fetch_nutrition_from_edamam(query: str) -> Optional[Dict]:
         "sugar_g": round(float((nutrients.get("SUGAR", {}) or {}).get("quantity", 0) or 0), 1),
         "sodium_mg": round(float((nutrients.get("NA", {}) or {}).get("quantity", 0) or 0), 1),
         "cholesterol_mg": round(float((nutrients.get("CHOLE", {}) or {}).get("quantity", 0) or 0), 1),
+        "vitaminA": round(float((nutrients.get("VITA_RAE", {}) or {}).get("quantity", 0) or 0), 1),
+        "vitaminC": round(float((nutrients.get("VITC", {}) or {}).get("quantity", 0) or 0), 1),
+        "vitaminD": round(float((nutrients.get("VITD", {}) or {}).get("quantity", 0) or 0), 1),
+        "vitaminE": round(float((nutrients.get("TOCPHA", {}) or {}).get("quantity", 0) or 0), 1),
+        "vitaminK": round(float((nutrients.get("VITK1", {}) or {}).get("quantity", 0) or 0), 1),
+        "calcium": round(float((nutrients.get("CA", {}) or {}).get("quantity", 0) or 0), 1),
+        "iron": round(float((nutrients.get("FE", {}) or {}).get("quantity", 0) or 0), 1),
+        "magnesium": round(float((nutrients.get("MG", {}) or {}).get("quantity", 0) or 0), 1),
+        "potassium": round(float((nutrients.get("K", {}) or {}).get("quantity", 0) or 0), 1),
     }
 
 
@@ -637,6 +655,15 @@ def _fetch_nutrition_from_usda(query: str) -> Optional[Dict]:
         "sugar_g": round(_extract_usda_value(food, USDA_NUTRIENT_NAME_MAP["sugar_g"]), 1),
         "sodium_mg": round(_extract_usda_value(food, USDA_NUTRIENT_NAME_MAP["sodium_mg"]), 1),
         "cholesterol_mg": round(_extract_usda_value(food, USDA_NUTRIENT_NAME_MAP["cholesterol_mg"]), 1),
+        "vitaminA": round(_extract_usda_value(food, USDA_NUTRIENT_NAME_MAP["vitaminA"]), 1),
+        "vitaminC": round(_extract_usda_value(food, USDA_NUTRIENT_NAME_MAP["vitaminC"]), 1),
+        "vitaminD": round(_extract_usda_value(food, USDA_NUTRIENT_NAME_MAP["vitaminD"]), 1),
+        "vitaminE": round(_extract_usda_value(food, USDA_NUTRIENT_NAME_MAP["vitaminE"]), 1),
+        "vitaminK": round(_extract_usda_value(food, USDA_NUTRIENT_NAME_MAP["vitaminK"]), 1),
+        "calcium": round(_extract_usda_value(food, USDA_NUTRIENT_NAME_MAP["calcium"]), 1),
+        "iron": round(_extract_usda_value(food, USDA_NUTRIENT_NAME_MAP["iron"]), 1),
+        "magnesium": round(_extract_usda_value(food, USDA_NUTRIENT_NAME_MAP["magnesium"]), 1),
+        "potassium": round(_extract_usda_value(food, USDA_NUTRIENT_NAME_MAP["potassium"]), 1),
     }
 
 

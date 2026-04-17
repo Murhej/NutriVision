@@ -139,3 +139,24 @@ def test_save_and_retrieve_meal_log(nutrition_client):
 
     get_resp = nutrition_client.get("/map/logs")
     assert get_resp.status_code in (200, 404)
+
+
+def test_delete_meal_log_by_timestamp_id(nutrition_client):
+    # Create a new log and delete it using its timestamp (mobile uses timestamp as id).
+    log_entry = {
+        "food_label": "banana",
+        "display_name": "Banana",
+        "portion_id": "medium",
+        "portion_multiplier": 1.0,
+        "nutrition": {"calories": 105},
+    }
+    post_resp = nutrition_client.post("/map/log", json=log_entry)
+    assert post_resp.status_code in (200, 201)
+    meal_id = post_resp.json().get("entry", {}).get("timestamp")
+    assert meal_id
+
+    del_resp = nutrition_client.delete(f"/map/log/{meal_id}")
+    assert del_resp.status_code == 200
+    payload = del_resp.json()
+    assert payload.get("status") == "deleted"
+    assert payload.get("meal_id") == meal_id

@@ -12,7 +12,7 @@ from typing import Dict, Optional
 
 from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel, Field
-from src.api.auth import get_current_user_id
+from src.api.auth import get_current_user_id, load_users, save_users
 
 from src.api.food_mapper import (
     FOOD_VARIANTS,
@@ -63,6 +63,54 @@ class MealLogRequest(BaseModel):
     prediction: Optional[Dict] = None
     source: Optional[str] = None
     image_url: Optional[str] = None
+
+
+def _to_num(value) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _pick_value(data: Dict, aliases: list[str]) -> float:
+    for key in aliases:
+        if key in data:
+            return _to_num(data.get(key))
+    return 0.0
+
+
+def _normalize_logged_nutrition(nutrition: Dict) -> Dict:
+    raw = nutrition or {}
+    calories = _pick_value(raw, ["calories", "Calories"])
+    protein = _pick_value(raw, ["protein_g", "protein", "Protein", "proteinG"])
+    carbs = _pick_value(raw, ["carbs_g", "carbs", "Carbs", "carbohydrate_g"])
+    fat = _pick_value(raw, ["fat_g", "fat", "Fat"])
+
+    vitamins = {
+        "vitaminA": _pick_value(raw, ["vitaminA", "VitaminA", "Vitamin A, RAE"]),
+        "vitaminC": _pick_value(raw, ["vitaminC", "VitaminC", "Vitamin C, total ascorbic acid"]),
+        "vitaminD": _pick_value(raw, ["vitaminD", "VitaminD", "Vitamin D (D2 + D3)"]),
+        "vitaminE": _pick_value(raw, ["vitaminE", "VitaminE", "Vitamin E (alpha-tocopherol)"]),
+        "vitaminK": _pick_value(raw, ["vitaminK", "VitaminK", "Vitamin K (phylloquinone)"]),
+    }
+
+    minerals = {
+        "calcium": _pick_value(raw, ["calcium", "Calcium", "Calcium, Ca"]),
+        "iron": _pick_value(raw, ["iron", "Iron", "Iron, Fe"]),
+        "magnesium": _pick_value(raw, ["magnesium", "Magnesium", "Magnesium, Mg"]),
+        "potassium": _pick_value(raw, ["potassium", "Potassium", "Potassium, K"]),
+        "sodium": _pick_value(raw, ["sodium", "sodium_mg", "Sodium", "Sodium, Na"]),
+    }
+
+    return {
+        "calories": round(calories, 1),
+        "protein": round(protein, 1),
+        "carbs": round(carbs, 1),
+        "fat": round(fat, 1),
+        "vitamins": {k: round(v, 1) for k, v in vitamins.items()},
+        "minerals": {k: round(v, 1) for k, v in minerals.items()},
+        "raw": raw,
+    }
 
 
 def _resolve_portion(portion_id: str, multiplier: Optional[float]) -> Dict:
@@ -186,8 +234,11 @@ def get_nutrition_by_query(request: NutritionQueryRequest):
 def save_meal_log(request: MealLogRequest, user_id: str = Depends(get_current_user_id)):
     if not request.food_label.strip():
         raise HTTPException(status_code=400, detail="Food label cannot be empty.")
+    normalized = _normalize_logged_nutrition(request.nutrition)
+    timestamp = datetime.now(timezone.utc).isoformat()
     entry = {
-        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "timestamp": timestamp,
+        "date": timestamp[:10],
         "user_id": user_id,
         "food_label": request.food_label,
         "display_name": request.display_name or request.food_label.replace("_", " "),
@@ -195,7 +246,21 @@ def save_meal_log(request: MealLogRequest, user_id: str = Depends(get_current_us
         "portion_id": request.portion_id,
         "portion_label": request.portion_label or PORTION_PRESETS.get(request.portion_id, PORTION_PRESETS["medium"])["label"],
         "portion_multiplier": max(0.25, min(float(request.portion_multiplier), 4.0)),
-        "nutrition": request.nutrition,
+        "calories": normalized["calories"],
+        "protein": normalized["protein"],
+        "carbs": normalized["carbs"],
+        "fat": normalized["fat"],
+        "vitamins": normalized["vitamins"],
+        "minerals": normalized["minerals"],
+        "nutrition": {
+            "calories": normalized["calories"],
+            "protein": normalized["protein"],
+            "carbs": normalized["carbs"],
+            "fat": normalized["fat"],
+            **normalized["vitamins"],
+            **normalized["minerals"],
+        },
+        "raw_nutrition": normalized["raw"],
         "prediction": request.prediction,
         "source": request.source,
         "image_url": request.image_url,
@@ -204,7 +269,7 @@ def save_meal_log(request: MealLogRequest, user_id: str = Depends(get_current_us
 
 
 @mapper_router.get("/logs")
-def get_meal_logs(limit: int = 20, user_id: str = Depends(get_current_user_id)):
+def get_meal_logs(limit: int = 20, date: Optional[str] = None, user_id: str = Depends(get_current_user_id)):
     if not MEAL_LOG_PATH.exists():
         return {"entries": [], "count": 0}
     try:
@@ -213,5 +278,64 @@ def get_meal_logs(limit: int = 20, user_id: str = Depends(get_current_user_id)):
     except:
         entries = []
     user_entries = [e for e in entries if e.get("user_id") == user_id]
+    if date:
+        user_entries = [e for e in user_entries if str(e.get("date") or str(e.get("timestamp", ""))[:10]) == date]
     sliced = list(reversed(user_entries[-max(1, min(limit, 100)):]))
     return {"entries": sliced, "count": len(user_entries)}
+
+
+@mapper_router.delete("/log/{meal_id}")
+@mapper_router.delete("/logs/{meal_id}")
+def delete_meal_log(meal_id: str, user_id: str = Depends(get_current_user_id)):
+    if not MEAL_LOG_PATH.exists():
+        raise HTTPException(status_code=404, detail="Meal log not found")
+
+    try:
+        with open(MEAL_LOG_PATH, "r", encoding="utf-8") as f:
+            entries = json.load(f)
+            if not isinstance(entries, list):
+                entries = []
+    except Exception:
+        entries = []
+
+    deleted_entry = None
+    kept_entries = []
+    for entry in entries:
+        is_owner = entry.get("user_id") == user_id
+        matches_id = str(entry.get("timestamp", "")) == meal_id
+        if deleted_entry is None and is_owner and matches_id:
+            deleted_entry = entry
+            continue
+        kept_entries.append(entry)
+
+    if deleted_entry is None:
+        raise HTTPException(status_code=404, detail="Meal log not found")
+
+    OUTPUTS_DIR.mkdir(parents=True, exist_ok=True)
+    with open(MEAL_LOG_PATH, "w", encoding="utf-8") as f:
+        json.dump(kept_entries, f, indent=2)
+
+    return {
+        "status": "deleted",
+        "meal_id": meal_id,
+        "deleted_entry": deleted_entry,
+        "remaining_count": len([e for e in kept_entries if e.get("user_id") == user_id]),
+    }
+
+
+class XpRequest(BaseModel):
+    action: str = "correction"
+    xp_awarded: int = 0
+
+
+@mapper_router.post("/xp")
+def award_xp(req: XpRequest, user_id: str = Depends(get_current_user_id)):
+    users = load_users()
+    if user_id not in users:
+        raise HTTPException(status_code=404, detail="User not found")
+    profile = users[user_id].setdefault("profile", {})
+    current_xp = int(profile.get("xp", 0))
+    new_xp = current_xp + max(0, req.xp_awarded)
+    profile["xp"] = new_xp
+    save_users(users)
+    return {"status": "ok", "action": req.action, "xp_awarded": req.xp_awarded, "total_xp": new_xp}

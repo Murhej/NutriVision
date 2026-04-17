@@ -32,6 +32,10 @@ const getBaseUrl = () => {
 
 export const API_BASE_URL = getBaseUrl();
 
+// Request timeout in milliseconds
+const REQUEST_TIMEOUT_MS = 15000; // 15 seconds for file uploads, 8 seconds for regular requests
+const REGULAR_TIMEOUT_MS = 8000;
+
 let currentToken = null;
 
 export const setAuthToken = (token) => {
@@ -57,66 +61,141 @@ const getHeaders = (upload = false) => {
 };
 
 /**
+ * Utility to wrap fetch with timeout
+ */
+const fetchWithTimeout = async (url, options, timeoutMs) => {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+  
+  try {
+    const response = await fetch(url, {
+      ...options,
+      signal: controller.signal,
+    });
+    clearTimeout(timeoutId);
+    return response;
+  } catch (error) {
+    clearTimeout(timeoutId);
+    if (error.name === 'AbortError') {
+      throw new Error(`Request timeout (${timeoutMs}ms). Check your internet connection or server availability.`);
+    }
+    throw error;
+  }
+};
+
+/**
  * Super simple wrapper around fetch to automatically prepend the base URL
  * and handle JSON parsing / error catching cleanly.
  */
 export const apiClient = {
   get: async (endpoint) => {
     try {
-      const response = await fetch(`${API_BASE_URL}${endpoint}`, {
-        method: 'GET',
-        headers: getHeaders(false),
-      });
+      const response = await fetchWithTimeout(
+        `${API_BASE_URL}${endpoint}`,
+        {
+          method: 'GET',
+          headers: getHeaders(false),
+        },
+        REGULAR_TIMEOUT_MS
+      );
+      
       if (!response.ok) {
-        throw new Error(`API Error: ${response.status}`);
+        const text = await response.text();
+        let detail = `HTTP ${response.status}`;
+        try {
+          const json = JSON.parse(text);
+          detail = json.detail || detail;
+        } catch (e) {
+          // text response
+        }
+        throw new Error(detail);
       }
+      
       return await response.json();
     } catch (error) {
-      console.error(`[GET ${endpoint}] Error:`, error);
-      throw error;
+      console.error(`[GET ${endpoint}] Error:`, error.message);
+      throw new Error(error.message || 'Failed to fetch data');
     }
   },
+
   post: async (endpoint, body) => {
     try {
-      const response = await fetch(`${API_BASE_URL}${endpoint}`, {
-        method: 'POST',
-        headers: getHeaders(false),
-        body: JSON.stringify(body)
-      });
-      if (!response.ok) throw new Error(`API Error: ${response.status}`);
+      const response = await fetchWithTimeout(
+        `${API_BASE_URL}${endpoint}`,
+        {
+          method: 'POST',
+          headers: getHeaders(false),
+          body: JSON.stringify(body),
+        },
+        REGULAR_TIMEOUT_MS
+      );
+      
+      if (!response.ok) {
+        const text = await response.text();
+        let detail = `HTTP ${response.status}`;
+        try {
+          const json = JSON.parse(text);
+          detail = json.detail || detail;
+        } catch (e) {
+          // text response
+        }
+        throw new Error(detail);
+      }
+      
       return await response.json();
     } catch (error) {
-      console.error(`[POST ${endpoint}] Error:`, error);
-      throw error;
+      console.error(`[POST ${endpoint}] Error:`, error.message);
+      throw new Error(error.message || 'Failed to post data');
     }
   },
+
   uploadImage: async (endpoint, uri) => {
     try {
       // Determine file extension and type
       const filename = uri.split('/').pop();
       const match = /\.(\w+)$/.exec(filename);
-      const type = match ? `image/${match[1]}` : `image`;
+      const ext = match ? match[1].toLowerCase() : 'jpg';
+      const mimeType = {
+        jpg: 'image/jpeg',
+        jpeg: 'image/jpeg',
+        png: 'image/png',
+        gif: 'image/gif',
+        webp: 'image/webp',
+      }[ext] || 'image/jpeg';
 
       const formData = new FormData();
       formData.append('file', {
         uri,
         name: filename,
-        type
+        type: mimeType,
       });
 
-      const response = await fetch(`${API_BASE_URL}${endpoint}`, {
-        method: 'POST',
-        body: formData,
-        headers: getHeaders(true),
-      });
+      const response = await fetchWithTimeout(
+        `${API_BASE_URL}${endpoint}`,
+        {
+          method: 'POST',
+          body: formData,
+          headers: getHeaders(true),
+        },
+        REQUEST_TIMEOUT_MS // Longer timeout for file uploads
+      );
       
       if (!response.ok) {
-        throw new Error(`Upload Error: ${response.status}`);
+        const text = await response.text();
+        let detail = `HTTP ${response.status}`;
+        try {
+          const json = JSON.parse(text);
+          detail = json.detail || detail;
+        } catch (e) {
+          // text response
+        }
+        throw new Error(detail);
       }
+      
       return await response.json();
     } catch (error) {
-      console.error(`[UPLOAD ${endpoint}] Error:`, error);
-      throw error;
+      console.error(`[UPLOAD ${endpoint}] Error:`, error.message);
+      throw new Error(error.message || 'Failed to upload image');
     }
-  }
+  },
 };

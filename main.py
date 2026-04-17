@@ -20,6 +20,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import socket
 import sys
 from typing import List
 
@@ -139,11 +140,27 @@ def _cmd_evaluate(_args: argparse.Namespace) -> None:
 def _cmd_serve(_args: argparse.Namespace) -> None:
     import uvicorn
     from src.api.app import app
+
+    def _find_available_port(start_port: int = 8000, max_tries: int = 10) -> int:
+        for port in range(start_port, start_port + max_tries):
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                try:
+                    sock.bind(("0.0.0.0", port))
+                    return port
+                except OSError:
+                    continue
+        raise RuntimeError(
+            f"No available port found in range {start_port}-{start_port + max_tries - 1}."
+        )
+
+    port = _find_available_port(start_port=8000, max_tries=10)
+
     print("Starting NutriVision API Server...")
-    print("  Docs:     http://localhost:8000/docs")
-    print("  Frontend: http://localhost:8000/static/index.html")
+    print(f"  Docs:     http://localhost:{port}/docs")
+    print(f"  Frontend: http://localhost:{port}/static/index.html")
     print("  Stop:     Ctrl+C\n")
-    uvicorn.run(app, host="0.0.0.0", port=8000, log_level="info")
+    uvicorn.run(app, host="0.0.0.0", port=port, log_level="info")
 
 
 def _cmd_download(args: argparse.Namespace) -> None:

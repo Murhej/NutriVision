@@ -12,9 +12,11 @@ from pathlib import Path
 from typing import Dict, List, Optional
 from uuid import uuid4
 
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from pydantic import BaseModel
 
 from src.api.food_mapper import fetch_nutrition
+from src.api.auth import get_current_user_id
 
 feedback_router = APIRouter(prefix="/feedback", tags=["User Feedback"])
 
@@ -156,6 +158,50 @@ def _append_manifest(entry: Dict) -> None:
     FEEDBACK_DIR.mkdir(parents=True, exist_ok=True)
     with open(MANIFEST_PATH, "a", encoding="utf-8") as f:
         f.write(json.dumps(entry) + "\n")
+
+
+class CorrectionPayload(BaseModel):
+    original_prediction: str = ""
+    corrected_food_name: str
+    serving_size: str = ""
+    serving_unit: str = ""
+    confidence: float = 0.0
+    timestamp: str = ""
+    has_top_image: bool = False
+    has_side_image: bool = False
+    has_inside_image: bool = False
+    has_label_image: bool = False
+
+
+@feedback_router.post("/corrections/submit")
+async def submit_correction(
+    payload: CorrectionPayload,
+    user_id: str = Depends(get_current_user_id),
+):
+    entry = {
+        "user_id": user_id,
+        "timestamp": payload.timestamp or datetime.now(timezone.utc).isoformat(),
+        "original_prediction": payload.original_prediction,
+        "corrected_food_name": payload.corrected_food_name,
+        "serving_size": payload.serving_size,
+        "serving_unit": payload.serving_unit,
+        "confidence": payload.confidence,
+        "has_images": {
+            "top": payload.has_top_image,
+            "side": payload.has_side_image,
+            "inside": payload.has_inside_image,
+            "label": payload.has_label_image,
+        },
+    }
+    corrections_file = OUTPUTS_DIR / "corrections.json"
+    try:
+        existing = json.loads(corrections_file.read_text(encoding="utf-8")) if corrections_file.exists() else []
+    except Exception:
+        existing = []
+    existing.append(entry)
+    OUTPUTS_DIR.mkdir(parents=True, exist_ok=True)
+    corrections_file.write_text(json.dumps(existing, indent=2), encoding="utf-8")
+    return {"status": "ok", "correction_id": f"{user_id}_{entry['timestamp']}"}
 
 
 @feedback_router.get("/guide")

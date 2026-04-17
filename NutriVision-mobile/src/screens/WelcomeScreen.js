@@ -1,5 +1,5 @@
 import React from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Image } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, Image } from 'react-native';
 import { useTheme } from '../theme/ThemeContext';
 import { Typography, Spacing, BorderRadius, Shadow } from '../theme';
 import { Button } from '../components';
@@ -7,64 +7,61 @@ import { Button } from '../components';
 export default function WelcomeScreen({ navigation }) {
   const { colors } = useTheme();
 
-  const features = [
-    { icon: '🎯', label: 'Track Goals', color: colors.primarySoft },
-    { icon: '🍽️', label: 'Log Meals', color: '#fef3c7' },
-    { icon: '📸', label: 'AI Scanner', color: '#dbeafe' },
-    { icon: '❤️', label: 'Live Healthy', color: '#fce7f3' },
-  ];
-
   return (
     <ScrollView
       style={[styles.container, { backgroundColor: colors.background }]}
       contentContainerStyle={styles.content}
+      showsVerticalScrollIndicator={false}
     >
-      <View style={styles.logoCircle}>
-        <Image 
-          source={require('../../assets/icon.png')} 
-          style={{ width: 80, height: 80, borderRadius: 20 }} 
-          resizeMode="cover" 
-        />
+      <View style={styles.heroWrap}>
+        <View style={[styles.glowRing, { backgroundColor: colors.primarySoft }]} />
+
+        <View style={[styles.logoShell, { backgroundColor: colors.surface, shadowColor: colors.shadowColor, shadowOpacity: colors.shadowOpacity }]}> 
+          <Image
+            source={require('../../assets/icon.png')}
+            style={styles.logoImage}
+            resizeMode="cover"
+          />
+        </View>
+
+        <View style={[styles.badge, { backgroundColor: colors.primarySoft, borderColor: colors.primaryLight }]}> 
+          <Text style={[styles.badgeText, { color: colors.primaryDark }]}>AI Nutrition Coach</Text>
+        </View>
       </View>
 
       <Text style={[styles.title, { color: colors.text }]}>
         Welcome to NutriVision
       </Text>
       <Text style={[styles.subtitle, { color: colors.textSecondary }]}>
-        Your AI-powered nutrition companion for a healthier lifestyle
+        Personalized tracking, smart meal scans, and clear progress in one place.
       </Text>
 
-      <View style={styles.grid}>
-        {features.map((feature, index) => (
-          <TouchableOpacity
-            key={index}
-            style={[
-              styles.featureCard,
-              {
-                backgroundColor: colors.surface,
-                borderColor: colors.border,
-                shadowColor: colors.shadowColor,
-                shadowOpacity: colors.shadowOpacity,
-              },
-            ]}
-            activeOpacity={0.7}
-          >
-            <View style={[styles.featureIcon, { backgroundColor: feature.color }]}>
-              <Text style={styles.featureEmoji}>{feature.icon}</Text>
-            </View>
-            <Text style={[styles.featureLabel, { color: colors.text }]}>
-              {feature.label}
-            </Text>
-          </TouchableOpacity>
-        ))}
-      </View>
+      <View
+        style={[
+          styles.actionCard,
+          {
+            backgroundColor: colors.surface,
+            borderColor: colors.border,
+            shadowColor: colors.shadowColor,
+            shadowOpacity: colors.shadowOpacity,
+          },
+        ]}
+      >
+        <Button
+          title="Get Started"
+          size="lg"
+          onPress={() => navigation.navigate('PersonalDetails')}
+          style={styles.cta}
+        />
 
-      <Button
-        title="Get Started  →"
-        size="lg"
-        onPress={() => navigation.replace('MainTabs')}
-        style={styles.cta}
-      />
+        <Button
+          title="I Already Have an Account"
+          size="lg"
+          variant="outline"
+          onPress={() => navigation.navigate('Login')}
+          style={styles.cta}
+        />
+      </View>
     </ScrollView>
   );
 }
@@ -76,68 +73,74 @@ const styles = StyleSheet.create({
   content: {
     flexGrow: 1,
     alignItems: 'center',
-    justifyContent: 'center',
+    justifyContent: 'space-between',
     paddingHorizontal: Spacing.xxl,
-    paddingVertical: Spacing.xxxl * 2,
+    paddingTop: Spacing.xxxl,
+    paddingBottom: Spacing.xxl,
   },
-  logoCircle: {
-    width: 80,
-    height: 80,
+  heroWrap: {
+    width: '100%',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingTop: Spacing.xl,
+    minHeight: 280,
+  },
+  glowRing: {
+    position: 'absolute',
+    width: 230,
+    height: 230,
+    borderRadius: 115,
+    opacity: 0.75,
+  },
+  logoShell: {
+    width: 136,
+    height: 136,
     borderRadius: 40,
     alignItems: 'center',
     justifyContent: 'center',
-    marginBottom: Spacing.xxl,
+    ...Shadow.lg,
   },
-  logoEmoji: {
-    fontSize: 40,
+  logoImage: {
+    width: 104,
+    height: 104,
+    borderRadius: 28,
+  },
+  badge: {
+    marginTop: Spacing.lg,
+    borderWidth: 1,
+    borderRadius: BorderRadius.full,
+    paddingHorizontal: Spacing.lg,
+    paddingVertical: Spacing.sm,
+  },
+  badgeText: {
+    ...Typography.bodyMedium,
+    fontSize: 16,
   },
   title: {
     ...Typography.hero,
     textAlign: 'center',
+    fontSize: 30,
+    marginTop: Spacing.xxl,
     marginBottom: Spacing.md,
   },
   subtitle: {
     ...Typography.body,
     textAlign: 'center',
-    maxWidth: 280,
-    lineHeight: 22,
-    marginBottom: Spacing.xxxl,
+    maxWidth: 320,
+    fontSize: 17,
+    lineHeight: 30,
   },
-  grid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    justifyContent: 'center',
-    gap: Spacing.md,
-    marginBottom: Spacing.xxxl,
+  actionCard: {
     width: '100%',
-  },
-  featureCard: {
-    width: '46%',
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: Spacing.xxl,
-    paddingHorizontal: Spacing.lg,
-    borderRadius: BorderRadius.lg,
     borderWidth: 1,
-    ...Shadow.sm,
-    gap: Spacing.md,
-  },
-  featureIcon: {
-    width: 52,
-    height: 52,
-    borderRadius: 26,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  featureEmoji: {
-    fontSize: 26,
-  },
-  featureLabel: {
-    ...Typography.bodyMedium,
-    textAlign: 'center',
+    borderRadius: 28,
+    padding: Spacing.xl,
+    gap: Spacing.lg,
+    ...Shadow.md,
+    marginTop: Spacing.xxxl,
   },
   cta: {
     width: '100%',
-    maxWidth: 320,
+    minHeight: 62,
   },
 });

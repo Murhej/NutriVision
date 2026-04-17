@@ -10,6 +10,7 @@ export function ThemeProvider({ children }) {
     isDark,
     colors: isDark ? Colors.dark : Colors.light,
     toggleTheme: () => setIsDark((prev) => !prev),
+    setDarkMode: (nextIsDark) => setIsDark(Boolean(nextIsDark)),
   }), [isDark]);
 
   return (

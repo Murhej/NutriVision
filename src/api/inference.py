@@ -176,7 +176,9 @@ def _load_model_and_config() -> Dict:
     report_path = RUNS_DIR / "report.json"
     if not report_path.exists():
         raise FileNotFoundError(
-            "Training report not found. Run training first: python main.py train"
+            f"Training report not found at {report_path}\n"
+            "Run training first: python main.py train\n"
+            "Or integrate a pre-trained model: python integrate_model.py --model-path <path>"
         )
 
     with open(report_path, "r", encoding="utf-8") as f:
@@ -193,32 +195,79 @@ def _load_model_and_config() -> Dict:
     _, test_transform = get_transforms()
     _state["transform"] = test_transform
 
-    from torchvision.datasets import Food101
-    dataset = Food101(root=str(DATA_DIR), split="test", download=False, transform=test_transform)
-    _state["dataset_class_names"] = dataset.classes
+    # Dataset assets are optional for prediction uploads. Keep API usable even if
+    # local Food-101 files are missing by loading model/report only.
+    dataset = None
+    dataset_index = None
+    dataset_classes: List[str] = []
+    try:
+        from torchvision.datasets import Food101
+
+        dataset = Food101(root=str(DATA_DIR), split="test", download=False, transform=test_transform)
+        dataset_classes = list(dataset.classes)
+    except Exception as exc:
+        print(f"[WARN] Dataset not available: {exc}")
+
+    _state["dataset_class_names"] = dataset_classes
     if not class_names:
-        class_names = list(dataset.classes)
+        class_names = list(dataset_classes)
     _state["class_names"] = class_names
     _state["dataset"] = dataset
+    # CPU inference can become very slow with multi-view TTA. Keep single-view
+    # on CPU for responsive mobile scanning.
+    if str(_state["device"]) == "cpu":
+        tta_views = 1
     _state["tta_views"] = tta_views
     class_sample_index = _build_class_sample_index(DATA_DIR, list(class_names))
     _state["class_sample_index"] = class_sample_index
     _state["sample_classes"] = sorted(class_sample_index.keys())
 
-    dataset_index = build_dataset_index(DATA_DIR, "test", list(dataset.classes))
-    if len(dataset_index) != len(dataset):
-        raise RuntimeError(f"Dataset index mismatch: {len(dataset_index)} vs {len(dataset)}")
+    if dataset is not None:
+        dataset_index = build_dataset_index(DATA_DIR, "test", list(dataset.classes))
+        if len(dataset_index) != len(dataset):
+            raise RuntimeError(f"Dataset index mismatch: {len(dataset_index)} vs {len(dataset)}")
     _state["dataset_index"] = dataset_index
 
-    model = build_model(model_name, len(class_names), pretrained=False)
-    model.load_state_dict(torch.load(RUNS_DIR / "best_model.pth", map_location=_state["device"], weights_only=True))
-    model = model.to(_state["device"]).eval()
-    _state["model"] = model
-
-    print(f"[OK] Model loaded: {model_name}")
-    print(f"[OK] Classes: {len(class_names)}")
-    print(f"[OK] Class samples indexed: {len(class_sample_index)}")
-    print(f"[OK] Test dataset: {len(dataset)} images")
+    # Load model weights with better error handling
+    model_weights_path = RUNS_DIR / "best_model.pth"
+    if not model_weights_path.exists():
+        raise FileNotFoundError(
+            f"Model weights not found at {model_weights_path}\n"
+            "Please run: python integrate_model.py --model-path <path>"
+        )
+    
+    try:
+        model = build_model(model_name, len(class_names), pretrained=False)
+        weights = torch.load(
+            str(model_weights_path),
+            map_location=_state["device"],
+            weights_only=True
+        )
+        model.load_state_dict(weights)
+        model = model.to(_state["device"]).eval()
+        _state["model"] = model
+        
+        print(f"[OK] Model loaded: {model_name}")
+        print(f"[OK] Device: {_state['device']}")
+        print(f"[OK] Classes: {len(class_names)}")
+        print(f"[OK] Class samples indexed: {len(class_sample_index)}")
+        if dataset is not None:
+            print(f"[OK] Test dataset: {len(dataset)} images")
+        else:
+            print("[WARN] Test dataset not loaded; dataset endpoints will return 503")
+        
+    except Exception as e:
+        error_msg = (
+            f"Failed to load model weights from {model_weights_path}:\n"
+            f"  Error: {str(e)}\n\n"
+            f"Possible solutions:\n"
+            f"  1. Re-train: python main.py train\n"
+            f"  2. Integrate a model: python integrate_model.py --model-path <path>\n"
+            f"  3. Check {model_weights_path} exists and is not corrupted\n"
+            f"  4. Ensure architecture '{model_name}' matches your weights\n"
+        )
+        raise RuntimeError(error_msg) from e
+    
     return report
 
 
@@ -293,12 +342,113 @@ def register_routes(app: FastAPI) -> None:
     @app.get("/health")
     async def health():
         state = _get_state()
-        return {
-            "status": "healthy",
-            "model_loaded": state.get("model") is not None,
-            "device": str(state.get("device")) if state.get("device") else None,
-            "num_classes": len(state["class_names"]) if state.get("class_names") else None,
+        
+        model_loaded = state.get("model") is not None
+        device = str(state.get("device")) if state.get("device") else "unknown"
+        num_classes = len(state["class_names"]) if state.get("class_names") else None
+        
+        # Check model file existence
+        model_weights_path = RUNS_DIR / "best_model.pth"
+        report_path = RUNS_DIR / "report.json"
+        
+        health_status = {
+            "status": "healthy" if model_loaded else "model_not_loaded",
+            "model_loaded": model_loaded,
+            "device": device,
+            "num_classes": num_classes,
+            "files": {
+                "best_model.pth": model_weights_path.exists(),
+                "report.json": report_path.exists(),
+            }
         }
+        
+        # Add diagnostic info if model not loaded
+        if not model_loaded:
+            issues = []
+            if not model_weights_path.exists():
+                issues.append(f"Model weights not found: {model_weights_path}")
+            if not report_path.exists():
+                issues.append(f"Report file not found: {report_path}")
+            
+            health_status["issues"] = issues
+            health_status["help"] = (
+                "To fix: python integrate_model.py --model-path <path> "
+                "or python main.py train"
+            )
+        
+        return health_status
+
+    @app.get("/diagnostics")
+    async def diagnostics():
+        """Detailed diagnostics endpoint for troubleshooting"""
+        state = _get_state()
+        
+        model_weights_path = RUNS_DIR / "best_model.pth"
+        report_path = RUNS_DIR / "report.json"
+        data_dir = DATA_DIR
+        
+        diagnostics_info = {
+            "paths": {
+                "base_dir": str(BASE_DIR),
+                "runs_dir": str(RUNS_DIR),
+                "data_dir": str(data_dir),
+                "model_weights": str(model_weights_path),
+                "report": str(report_path),
+            },
+            "files": {
+                "best_model.pth": {
+                    "exists": model_weights_path.exists(),
+                    "size_mb": round(model_weights_path.stat().st_size / 1e6, 2) if model_weights_path.exists() else None,
+                },
+                "report.json": {
+                    "exists": report_path.exists(),
+                    "contents": None
+                },
+                "data_dir": {
+                    "exists": data_dir.exists(),
+                    "is_dir": data_dir.is_dir() if data_dir.exists() else False,
+                }
+            },
+            "model_state": {
+                "loaded": state.get("model") is not None,
+                "device": str(state.get("device")) if state.get("device") else "not initialized",
+                "num_classes": len(state.get("class_names", [])),
+                "has_dataset": state.get("dataset") is not None,
+                "has_transforms": state.get("transform") is not None,
+            },
+            "system": {
+                "cuda_available": torch.cuda.is_available(),
+                "cuda_device": torch.cuda.get_device_name(0) if torch.cuda.is_available() else "N/A",
+                "torch_version": torch.__version__,
+            }
+        }
+        
+        # Try to load and display report contents
+        if report_path.exists():
+            try:
+                with open(report_path, "r") as f:
+                    report = json.load(f)
+                    diagnostics_info["files"]["report.json"]["contents"] = {
+                        "best_model_name": report.get("best_model_name"),
+                        "num_classes": len(report.get("class_names", [])),
+                        "has_config": "config" in report,
+                    }
+            except Exception as e:
+                diagnostics_info["files"]["report.json"]["error"] = str(e)
+        
+        # Add troubleshooting guide
+        if not state.get("model"):
+            diagnostics_info["troubleshooting"] = {
+                "issue": "Model not loaded",
+                "solutions": [
+                    "1. Check if best_model.pth exists: ls -la runs/best_model.pth",
+                    "2. Check if report.json is valid: cat runs/report.json",
+                    "3. Integrate a model: python integrate_model.py --model-path <path>",
+                    "4. Train a new model: python main.py train",
+                ]
+            }
+        
+        return diagnostics_info
 
     @app.get("/info")
     async def get_info():
@@ -368,6 +518,11 @@ def register_routes(app: FastAPI) -> None:
         try:
             contents = await file.read()
             image = Image.open(io.BytesIO(contents)).convert("RGB")
+            # Large phone photos increase upload/decode time and don't improve
+            # model accuracy (the transform downsamples anyway). Clamp size.
+            max_side = 480
+            if max(image.size) > max_side:
+                image.thumbnail((max_side, max_side), Image.Resampling.LANCZOS)
             return _predict_pil_image(image)
         except HTTPException:
             raise

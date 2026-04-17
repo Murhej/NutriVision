@@ -1,24 +1,39 @@
 import React from 'react';
+import { ActivityIndicator, View } from 'react-native';
 import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTheme } from '../theme/ThemeContext';
+import { useAuth } from '../context/AuthContext';
 import { Home, CalendarDays, Camera, Newspaper, User, Trophy } from 'lucide-react-native';
 
 // Screens
 import WelcomeScreen from '../screens/WelcomeScreen';
+import LoginScreen from '../screens/LoginScreen';
+import PersonalDetailsScreen from '../screens/PersonalDetailsScreen';
+import GoalScreen from '../screens/GoalScreen';
+import ChallengeScreen from '../screens/ChallengeScreen';
+import DietaryPreferencesScreen from '../screens/DietaryPreferencesScreen';
+import AllergiesScreen from '../screens/AllergiesScreen';
+import ActivityLevelScreen from '../screens/ActivityLevelScreen';
+import TrainingSetupScreen from '../screens/TrainingSetupScreen';
+import ProfileReviewScreen from '../screens/ProfileReviewScreen';
 import DashboardScreen from '../screens/DashboardScreen';
 import CalendarScreen from '../screens/CalendarScreen';
 import ScanScreen from '../screens/ScanScreen';
 import FeedScreen from '../screens/FeedScreen';
 import ProfileScreen from '../screens/ProfileScreen';
 import LeaderboardScreen from '../screens/LeaderboardScreen';
+import WrongPredictionScreen from '../screens/WrongPredictionScreen';
+import AchievementsScreen from '../screens/AchievementsScreen';
 
 const Stack = createNativeStackNavigator();
 const Tab = createBottomTabNavigator();
 
 function MainTabs() {
   const { colors } = useTheme();
+  const insets = useSafeAreaInsets();
 
   return (
     <Tab.Navigator
@@ -30,9 +45,9 @@ function MainTabs() {
           backgroundColor: colors.tabBar,
           borderTopColor: colors.tabBarBorder,
           borderTopWidth: 1,
-          paddingBottom: 8,
+          paddingBottom: insets.bottom + 8,
           paddingTop: 8,
-          height: 64,
+          height: 56 + insets.bottom,
           elevation: 8,
           shadowColor: '#000',
           shadowOffset: { width: 0, height: -4 },
@@ -43,6 +58,10 @@ function MainTabs() {
           fontSize: 11,
           fontWeight: '600',
           marginTop: 2,
+        },
+        tabBarItemStyle: {
+          flex: 1,
+          paddingHorizontal: 2,
         },
       }}
     >
@@ -95,6 +114,15 @@ function MainTabs() {
 
 export default function AppNavigator() {
   const { colors } = useTheme();
+  const { isLoading, isAuthenticated } = useAuth();
+
+  if (isLoading) {
+    return (
+      <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.background }}>
+        <ActivityIndicator size="large" color={colors.primary} />
+      </View>
+    );
+  }
 
   return (
     <NavigationContainer>
@@ -104,8 +132,26 @@ export default function AppNavigator() {
           contentStyle: { backgroundColor: colors.background },
         }}
       >
-        <Stack.Screen name="Welcome" component={WelcomeScreen} />
-        <Stack.Screen name="MainTabs" component={MainTabs} />
+        {isAuthenticated ? (
+          <>
+            <Stack.Screen name="MainTabs" component={MainTabs} />
+            <Stack.Screen name="Achievements" component={AchievementsScreen} />
+            <Stack.Screen name="WrongPrediction" component={WrongPredictionScreen} />
+          </>
+        ) : (
+          <>
+            <Stack.Screen name="Welcome" component={WelcomeScreen} />
+            <Stack.Screen name="Login" component={LoginScreen} />
+            <Stack.Screen name="PersonalDetails" component={PersonalDetailsScreen} />
+            <Stack.Screen name="Goal" component={GoalScreen} />
+            <Stack.Screen name="Challenge" component={ChallengeScreen} />
+            <Stack.Screen name="DietaryPreferences" component={DietaryPreferencesScreen} />
+            <Stack.Screen name="Allergies" component={AllergiesScreen} />
+            <Stack.Screen name="ActivityLevel" component={ActivityLevelScreen} />
+            <Stack.Screen name="TrainingSetup" component={TrainingSetupScreen} />
+            <Stack.Screen name="ProfileReview" component={ProfileReviewScreen} />
+          </>
+        )}
       </Stack.Navigator>
     </NavigationContainer>
   );
