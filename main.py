@@ -24,6 +24,7 @@ import socket
 import sys
 from typing import List
 
+from src.api import app
 from src.training.config import IncrementalConfig
 
 # ---------------------------------------------------------------------------
